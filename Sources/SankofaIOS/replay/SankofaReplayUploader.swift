@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Uploads captured replay frames to the Sankofa backend.
 ///

@@ -43,13 +43,14 @@ final class SankofaQueueManager {
             return dir.appendingPathComponent("queue.sqlite").path
         }()
 
+        var database: DatabasePool
         do {
             // 🚨 CONCURRENCY FIX: Use DatabasePool instead of DatabaseQueue.
             // DatabasePool automatically enables WAL (Write-Ahead Logging) mode,
             // allowing the FlushManager to read batches while the Replay engines
             // are writing frames simultaneously.
-            db = try DatabasePool(path: dbPath)
-            try db.write { db in
+            database = try DatabasePool(path: dbPath)
+            try database.write { db in
                 try db.create(table: QueuedEvent.databaseTableName, ifNotExists: true) { t in
                     t.autoIncrementedPrimaryKey("id")
                     t.column("type", .text).notNull()
@@ -59,10 +60,11 @@ final class SankofaQueueManager {
             }
             logger.log("💾 SQLite queue (WAL mode) opened at \(dbPath)")
         } catch {
-            // Fallback: in-memory database queue so the SDK never crashes.
-            db = try! DatabasePool()
+            // Fallback: Use a temporary in-memory pool if the file system fails.
+            database = try! DatabasePool(path: ":memory:")
             logger.warn("⚠️ Failed to open SQLite pool, using in-memory: \(error)")
         }
+        self.db = database
     }
 
     // MARK: - Public
@@ -76,6 +78,7 @@ final class SankofaQueueManager {
         let type = event["type"] as? String ?? "track"
         var record = QueuedEvent(id: nil, type: type, payload: data, createdAt: Date())
         do {
+            // Sync write is fine here as it's a simple record insertion.
             try db.write { db in try record.insert(db) }
             logger.log("📥 Queued '\(type)' (total: \(count()))")
         } catch {
@@ -95,7 +98,8 @@ final class SankofaQueueManager {
 
         let batch: [QueuedEvent]
         do {
-            batch = try db.read { db in
+            // 🚨 Use `await` here because we are in an `async` context.
+            batch = try await db.read { db in
                 try QueuedEvent
                     .order(Column("createdAt").asc)
                     .limit(limit)
@@ -109,7 +113,8 @@ final class SankofaQueueManager {
         let successIds = await handler(batch)
 
         do {
-            try db.write { db in
+            // 🚨 Use `await` here because we are in an `async` context.
+            try await db.write { db in
                 for event in batch {
                     guard let id = event.id, successIds.contains(id) else { continue }
                     try event.delete(db)

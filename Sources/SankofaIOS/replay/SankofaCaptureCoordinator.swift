@@ -65,7 +65,11 @@ final class SankofaCaptureCoordinator {
         let proxy = WeakProxy(self)
         let link = CADisplayLink(target: proxy, selector: #selector(WeakProxy.onTick))
         link.add(to: .main, forMode: .common)
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 1, maximum: 30)
+        if #available(iOS 15.0, *) {
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 1, maximum: 30)
+        } else {
+            link.preferredFramesPerSecond = Int(targetFPS)
+        }
         displayLink = link
     }
 
@@ -90,23 +94,6 @@ final class SankofaCaptureCoordinator {
             self.uploader.upload(frame)
         }
     }
-}
-
-// MARK: - WeakProxy
-
-/// Breaks the CADisplayLink retain cycle by holding a weak reference to the target.
-final class WeakProxy {
-    private weak var target: NSObject?
-
-    init(_ target: NSObject) {
-        self.target = target
-    }
-
-    @objc func onTick() {
-        // Forward the selector to the target if it still exists.
-        _ = target?.perform(NSSelectorFromString("tick"))
-    }
-}
     // MARK: - Escalation (Phase 3)
 
     /// Configure the trigger map from remote config.
@@ -134,3 +121,19 @@ final class WeakProxy {
         }
     }
 }
+
+// MARK: - WeakProxy
+
+/// Breaks the CADisplayLink retain cycle by holding a weak reference to the target.
+final class WeakProxy {
+    private weak var target: SankofaCaptureCoordinator?
+
+    init(_ target: SankofaCaptureCoordinator) {
+        self.target = target
+    }
+
+    @objc func onTick() {
+        target?.tick()
+    }
+}
+

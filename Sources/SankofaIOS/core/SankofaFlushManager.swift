@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Manages periodic and event-driven flushing of the `SankofaQueueManager`.
 ///
@@ -71,7 +72,7 @@ final class SankofaFlushManager {
                 lock.unlock()
             }
 
-            await queueManager.flush(limit: batchSize) { [weak self] batch -> Set<Int64> in
+            await queueManager.flush(limit: batchSize) { [weak self] batch async -> Set<Int64> in
                 guard let self else { return [] }
 
                 // 🚨 BACKGROUND PROTECTION: Tell iOS to give us extra time to

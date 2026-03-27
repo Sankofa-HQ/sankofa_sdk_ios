@@ -19,7 +19,8 @@ let package = Package(
         // mirroring the Android SDK's Room database architecture.
         .package(
             url: "https://github.com/groue/GRDB.swift.git",
-            from: "6.0.0"
+            // from: "6.0.0"
+            exact: "7.10.0"
         ),
     ],
     targets: [
