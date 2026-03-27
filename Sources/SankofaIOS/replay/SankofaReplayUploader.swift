@@ -11,11 +11,18 @@ final class SankofaReplayUploader {
     private let endpoint: String
     private let logger: SankofaLogger
     private let uploadQueue = DispatchQueue(label: "dev.sankofa.replay.upload", qos: .background)
+    
+    private var chunkIndex: Int = 0
+    private var distinctId: String = "anonymous"
 
     init(apiKey: String, endpoint: String, logger: SankofaLogger) {
         self.apiKey = apiKey
         self.endpoint = endpoint
         self.logger = logger
+    }
+    
+    func setDistinctId(_ id: String) {
+        self.distinctId = id
     }
 
     func upload(_ frame: SankofaFrame) {
@@ -33,15 +40,21 @@ final class SankofaReplayUploader {
             }
 
             let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-            guard let url = URL(string: "\(base)/api/v1/replay") else { 
+            // EE Ingestion uses /api/replay/chunk
+            guard let url = URL(string: "\(base)/api/replay/chunk") else { 
                 UIApplication.shared.endBackgroundTask(bgTask)
                 return 
             }
 
+            let currentChunk = self.chunkIndex
+            self.chunkIndex += 1
+
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-            request.setValue(frame.sessionId, forHTTPHeaderField: "x-session-id")
+            request.setValue(frame.sessionId, forHTTPHeaderField: "X-Session-Id")
+            request.setValue(distinctId, forHTTPHeaderField: "X-Distinct-Id")
+            request.setValue(String(currentChunk), forHTTPHeaderField: "X-Chunk-Index")
             request.setValue(
                 ISO8601DateFormatter().string(from: frame.timestamp),
                 forHTTPHeaderField: "x-frame-timestamp"
@@ -50,11 +63,11 @@ final class SankofaReplayUploader {
             switch frame.payload {
             case .wireframe(let data):
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue("wireframe", forHTTPHeaderField: "x-replay-type")
+                request.setValue("wireframe", forHTTPHeaderField: "X-Replay-Mode")
                 request.httpBody = data
             case .screenshot(let data):
                 request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-                request.setValue("screenshot", forHTTPHeaderField: "x-replay-type")
+                request.setValue("screenshot", forHTTPHeaderField: "X-Replay-Mode")
                 request.httpBody = data
             }
 
@@ -62,9 +75,9 @@ final class SankofaReplayUploader {
                 if let error {
                     self?.logger.warn("❌ Replay upload failed: \(error.localizedDescription)")
                 } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    self?.logger.warn("❌ Replay upload HTTP \(http.statusCode)")
+                    self?.logger.warn("❌ Replay upload HTTP \(http.statusCode) for chunk \(currentChunk)")
                 } else {
-                    self?.logger.log("📹 Frame uploaded (\(frame.sessionId))")
+                    self?.logger.log("📹 Frame uploaded (\(frame.sessionId)) chunk \(currentChunk)")
                 }
                 
                 // Done! Tell iOS it can suspend.

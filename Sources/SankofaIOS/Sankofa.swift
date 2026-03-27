@@ -35,41 +35,14 @@ public final class Sankofa: NSObject {
     private var apiKey: String = ""
     private var isInitialized = false
 
-    private lazy var logger = SankofaLogger(debug: config.debug)
-    private lazy var identity = SankofaIdentity()
-    private lazy var sessionManager = SankofaSessionManager()
-    private lazy var deviceInfo = SankofaDeviceInfo()
-    private lazy var queueManager: SankofaQueueManager = {
-        SankofaQueueManager(logger: logger)
-    }()
-    private lazy var flushManager: SankofaFlushManager = {
-        SankofaFlushManager(
-            apiKey: apiKey,
-            endpoint: config.endpoint,
-            queueManager: queueManager,
-            batchSize: config.batchSize,
-            flushInterval: config.flushIntervalSeconds,
-            logger: logger
-        )
-    }()
-    private lazy var lifecycleObserver = SankofaLifecycleObserver(
-        flushManager: flushManager,
-        trackLifecycle: config.trackLifecycleEvents,
-        onLifecycleEvent: { [weak self] event in
-            self?.track(event)
-        }
-    )
-    private lazy var captureCoordinator: SankofaCaptureCoordinator = {
-        SankofaCaptureCoordinator(
-            mode: config.captureMode,
-            maskAllInputs: config.maskAllInputs,
-            uploader: SankofaReplayUploader(
-                apiKey: apiKey,
-                endpoint: config.endpoint,
-                logger: logger
-            )
-        )
-    }()
+    private var logger = SankofaLogger(debug: false)
+    private var identity = SankofaIdentity()
+    private var sessionManager = SankofaSessionManager()
+    private var deviceInfo = SankofaDeviceInfo()
+    private var queueManager: SankofaQueueManager?
+    private var flushManager: SankofaFlushManager?
+    private var lifecycleObserver: SankofaLifecycleObserver?
+    private var captureCoordinator: SankofaCaptureCoordinator?
 
     // MARK: - Public API
 
@@ -84,12 +57,47 @@ public final class Sankofa: NSObject {
         self.config = config
         self.isInitialized = true
 
+        self.logger = SankofaLogger(debug: config.debug)
+        let qm = SankofaQueueManager(logger: logger)
+        self.queueManager = qm
+
+        let fm = SankofaFlushManager(
+            apiKey: apiKey,
+            endpoint: config.endpoint,
+            queueManager: qm,
+            batchSize: config.batchSize,
+            flushInterval: config.flushIntervalSeconds,
+            logger: logger
+        )
+        self.flushManager = fm
+
+        let observer = SankofaLifecycleObserver(
+            flushManager: fm,
+            trackLifecycle: config.trackLifecycleEvents,
+            onLifecycleEvent: { [weak self] event in
+                self?.track(event)
+            }
+        )
+        self.lifecycleObserver = observer
+
+        let coordinator = SankofaCaptureCoordinator(
+            mode: config.captureMode,
+            maskAllInputs: config.maskAllInputs,
+            uploader: SankofaReplayUploader(
+                apiKey: apiKey,
+                endpoint: config.endpoint,
+                logger: logger
+            )
+        )
+        coordinator.uploader.setDistinctId(identity.distinctId)
+        self.captureCoordinator = coordinator
+
         logger.log("✅ Sankofa initialized (endpoint: \(config.endpoint))")
 
-        lifecycleObserver.start()
+        observer.start()
 
         if config.recordSessions {
-            captureCoordinator.start()
+            coordinator.start()
         }
     }
 
@@ -99,6 +107,9 @@ public final class Sankofa: NSObject {
         assertInitialized()
         identity.identify(userId: userId)
         logger.log("👤 Identified user: \(userId)")
+        
+        // Update uploader with new identity
+        captureCoordinator?.uploader.setDistinctId(userId)
 
         let payload: [String: Any] = [
             "type": "alias",
@@ -107,7 +118,7 @@ public final class Sankofa: NSObject {
             "session_id": sessionManager.sessionId,
             "timestamp": ISO8601DateFormatter().string(from: Date()),
         ]
-        queueManager.enqueue(payload)
+        queueManager?.enqueue(payload)
     }
 
     /// Track a custom event with optional properties.
@@ -115,20 +126,23 @@ public final class Sankofa: NSObject {
     public func track(_ event: String, properties: [String: Any] = [:]) {
         assertInitialized()
         
+        var eventProps = properties
+        eventProps["$event_name"] = event // Promote to property for dashboard display
+        
         let payload: [String: Any] = [
             "type": "track",
             "event_name": event,
             "distinct_id": identity.distinctId,
             "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "properties": properties,
+            "properties": eventProps,
             "default_properties": defaultProperties()
         ]
 
         logger.log("📈 track → \(event)")
-        queueManager.enqueue(payload)
+        queueManager?.enqueue(payload)
 
         // Let the coordinator check escalation triggers.
-        captureCoordinator.onEvent(event)
+        captureCoordinator?.onEvent(event)
     }
 
     /// Set profile attributes for the current user.
@@ -149,7 +163,7 @@ public final class Sankofa: NSObject {
         ]
 
         logger.log("👤 setPerson")
-        queueManager.enqueue(payload)
+        queueManager?.enqueue(payload)
     }
 
     /// Reset identity. Call on logout to start a fresh anonymous session.
@@ -164,7 +178,7 @@ public final class Sankofa: NSObject {
     /// Immediately flush all queued events to the backend.
     @objc
     public func flush() {
-        flushManager.flush()
+        flushManager?.flush()
     }
 
     // MARK: - Helpers

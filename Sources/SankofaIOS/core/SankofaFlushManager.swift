@@ -19,9 +19,9 @@ final class SankofaFlushManager {
     private let lock = NSLock()
 
     private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.background(withIdentifier: "dev.sankofa.sdk.flush")
-        config.isDiscretionary = false
-        config.sessionSendsLaunchEvents = true
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.waitsForConnectivity = true
         return URLSession(configuration: config)
     }()
 
@@ -120,12 +120,14 @@ final class SankofaFlushManager {
                     let body = try JSONSerialization.data(withJSONObject: batchPayload)
                     request.httpBody = body
                     
-                    let (_, response) = try await URLSession.shared.data(for: request)
+                    // 🚨 USE CONFIGURED SESSION: Use the background-session configured in the class.
+                    let (data, response) = try await session.data(for: request)
                     if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                         self.logger.log("✅ Flushed batch of \(operations.count) events")
                         batch.forEach { if let id = $0.id { successIds.insert(id) } }
                     } else {
-                        self.logger.warn("❌ Server rejected batch")
+                        let bodyStr = String(data: data, encoding: .utf8) ?? "no body"
+                        self.logger.warn("❌ Server rejected batch: \(bodyStr)")
                     }
                 } catch {
                     self.logger.warn("❌ Batch network error: \(error.localizedDescription)")
