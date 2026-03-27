@@ -22,6 +22,8 @@ final class SankofaCaptureCoordinator {
     private lazy var screenshotEngine = SankofaScreenshotEngine(sessionId: sessionId, maskAllInputs: maskAllInputs)
 
     private var currentEngine: SankofaCaptureEngine
+    private let deviceInfo = SankofaDeviceInfo()
+    private var touchInterceptor: SankofaTouchInterceptor?
 
     // MARK: - Scheduler
 
@@ -59,6 +61,13 @@ final class SankofaCaptureCoordinator {
         currentEngine = wireframeEngine
 
         skipFrames = max(0, Int(60.0 / targetFPS) - 1)
+        
+        // Attach touch interceptor to the key window
+        if let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) {
+            let interceptor = SankofaTouchInterceptor(target: nil, action: nil)
+            window.addGestureRecognizer(interceptor)
+            self.touchInterceptor = interceptor
+        }
 
         // 🚨 Retain Cycle Fix: CADisplayLink strongly retains its target. 
         // We use a WeakProxy to ensure the Coordinator can be deinitialized.
@@ -87,11 +96,15 @@ final class SankofaCaptureCoordinator {
         guard frameCounter > skipFrames else { return }
         frameCounter = 0
 
+        // Flush interactions collected since last tick
+        let interactions = touchInterceptor?.flush() ?? []
+        let context = deviceInfo.deviceContext()
+
         // The engine grabs the image instantly on the main thread, 
         // and calls the completion handler when the background compression is done.
         currentEngine.captureFrame { [weak self] frame in
             guard let self = self, let frame = frame else { return }
-            self.uploader.upload(frame)
+            self.uploader.upload(frame, deviceContext: context, interactions: interactions)
         }
     }
     // MARK: - Escalation (Phase 3)

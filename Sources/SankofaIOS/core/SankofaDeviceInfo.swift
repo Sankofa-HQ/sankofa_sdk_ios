@@ -31,6 +31,18 @@ final class SankofaDeviceInfo {
         props["$app_build"] = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
     }
 
+    func deviceContext() -> [String: Any] {
+        let screen = UIScreen.main
+        let bounds = screen.nativeBounds
+        let scale = screen.nativeScale
+        
+        return [
+            "screen_width": Int(bounds.width),
+            "screen_height": Int(bounds.height),
+            "pixel_ratio": Double(scale)
+        ]
+    }
+
     private static func deviceModel() -> String {
         var systemInfo = utsname()
         uname(&systemInfo)

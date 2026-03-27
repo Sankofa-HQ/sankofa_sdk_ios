@@ -25,7 +25,7 @@ final class SankofaReplayUploader {
         self.distinctId = id
     }
 
-    func upload(_ frame: SankofaFrame) {
+    func upload(_ frame: SankofaFrame, deviceContext: [String: Any]? = nil, interactions: [SankofaTouchInterceptor.Interaction] = []) {
         // 🚨 BACKGROUND PROTECTION: Protect the replay upload context.
         var bgTask: UIBackgroundTaskIdentifier = .invalid
         bgTask = UIApplication.shared.beginBackgroundTask {
@@ -56,9 +56,13 @@ final class SankofaReplayUploader {
             request.setValue(distinctId, forHTTPHeaderField: "X-Distinct-Id")
             request.setValue(String(currentChunk), forHTTPHeaderField: "X-Chunk-Index")
             
+            // 🚀 INTERACTION PROCESSING: Find the latest interaction for frame-level metadata.
+            let latestInteraction = interactions.last
+            
             // 📦 DYNAMIC PAYLOAD: Wrap in the dashboard-expected JSON schema.
-            let envelope: [String: Any]
+            var envelope: [String: Any] = [:]
             let replayMode: String
+            
             switch frame.payload {
             case .wireframe(let data):
                 replayMode = "wireframe"
@@ -66,11 +70,19 @@ final class SankofaReplayUploader {
                 envelope = [
                     "mode": "wireframe",
                     "events": [[
-                        "type": "ui_snapshot",
+                        "type": latestInteraction?.type ?? "ui_snapshot",
                         "time_offset_ms": 0,
                         "nodes": [json]
                     ]]
                 ]
+                
+                // Add interaction coords at top level for Wireframe playback
+                if let interact = latestInteraction {
+                    envelope["x"] = interact.x
+                    envelope["y"] = interact.y
+                    envelope["eventType"] = interact.type
+                }
+                
             case .screenshot(let data):
                 replayMode = "screenshot"
                 envelope = [
@@ -80,6 +92,30 @@ final class SankofaReplayUploader {
                         "image_base64": data.base64EncodedString()
                     ]]
                 ]
+            }
+
+            // Standard mobile metadata
+            if let deviceContext {
+                envelope["device_context"] = deviceContext
+            }
+            
+            // Interaction list for ripples
+            if !interactions.isEmpty {
+                envelope["interactions"] = interactions.map { i in
+                    let type: Int
+                    switch i.type {
+                    case "pointer_down": type = 2
+                    case "pointer_up": type = 1
+                    default: type = 0 // pointer_move
+                    }
+                    
+                    return [
+                        "type": type,
+                        "x": i.x,
+                        "y": i.y,
+                        "timestamp": Int64(i.timestamp.timeIntervalSince1970 * 1000)
+                    ]
+                }
             }
 
             request.setValue(replayMode, forHTTPHeaderField: "X-Replay-Mode")
