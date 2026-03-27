@@ -11,7 +11,7 @@ final class SankofaCaptureCoordinator {
     // MARK: - Config
 
     private let maskAllInputs: Bool
-    private let uploader: SankofaReplayUploader
+    let uploader: SankofaReplayUploader
     private var sessionId: String = ""
 
     private let targetFPS: Double = 2.0  // 2 frames/sec — low enough to avoid battery drain
