@@ -48,25 +48,29 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
     // MARK: - View Tree Serialization
 
     private func serializeView(_ view: UIView) -> [String: Any] {
+        let frame = view.frame
         var node: [String: Any] = [
-            "$type": typeName(of: view),
-            "$frame": frameDict(view.frame),
-            "$hidden": view.isHidden,
-            "$alpha": view.alpha,
+            "t": typeName(of: view),
+            "x": frame.origin.x,
+            "y": frame.origin.y,
+            "w": frame.size.width,
+            "h": frame.size.height,
+            "hidden": view.isHidden,
+            "alpha": view.alpha
         ]
 
         // Extract text content where safe (not from secure fields)
         if let label = view as? UILabel {
-            node["$text"] = label.text ?? ""
+            node["v"] = label.text ?? ""
         } else if let button = view as? UIButton {
-            node["$text"] = button.currentTitle ?? ""
+            node["v"] = button.currentTitle ?? ""
         } else if let textField = view as? UITextField {
             // Never capture text content from text fields
-            node["$text"] = "[masked]"
-            node["$masked"] = true
+            node["v"] = "[masked]"
+            node["masked"] = true
         } else if let textView = view as? UITextView {
-            node["$text"] = "[masked]"
-            node["$masked"] = true
+            node["v"] = "[masked]"
+            node["masked"] = true
         }
 
         // Recurse into visible subviews
@@ -75,7 +79,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             .map { serializeView($0) }
 
         if !children.isEmpty {
-            node["$children"] = children
+            node["c"] = children
         }
 
         return node
@@ -95,9 +99,5 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         case is UICollectionView: return "CollectionView"
         default:              return "View"
         }
-    }
-
-    private func frameDict(_ rect: CGRect) -> [String: CGFloat] {
-        ["x": rect.origin.x, "y": rect.origin.y, "w": rect.size.width, "h": rect.size.height]
     }
 }

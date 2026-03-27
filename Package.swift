@@ -29,7 +29,10 @@ let package = Package(
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
-            path: "Sources/SankofaIOS"
+            path: "Sources/SankofaIOS",
+            linkerSettings: [
+                .linkedLibrary("z")
+            ]
         ),
         .testTarget(
             name: "SankofaIOSTests",

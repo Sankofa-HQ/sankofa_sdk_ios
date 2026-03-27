@@ -55,24 +55,47 @@ final class SankofaReplayUploader {
             request.setValue(frame.sessionId, forHTTPHeaderField: "X-Session-Id")
             request.setValue(distinctId, forHTTPHeaderField: "X-Distinct-Id")
             request.setValue(String(currentChunk), forHTTPHeaderField: "X-Chunk-Index")
-            request.setValue("screenshot", forHTTPHeaderField: "X-Replay-Mode")
             
-            let payloadData: Data
+            // 📦 DYNAMIC PAYLOAD: Wrap in the dashboard-expected JSON schema.
+            let envelope: [String: Any]
+            let replayMode: String
             switch frame.payload {
             case .wireframe(let data):
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                payloadData = data
+                replayMode = "wireframe"
+                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+                envelope = [
+                    "mode": "wireframe",
+                    "events": [[
+                        "type": "ui_snapshot",
+                        "time_offset_ms": 0,
+                        "nodes": [json]
+                    ]]
+                ]
             case .screenshot(let data):
-                request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-                payloadData = data
+                replayMode = "screenshot"
+                envelope = [
+                    "mode": "screenshot",
+                    "frames": [[
+                        "timestamp": Int64(frame.timestamp.timeIntervalSince1970 * 1000),
+                        "image_base64": data.base64EncodedString()
+                    ]]
+                ]
             }
 
-            // GZIP Compression (Backend compatibility)
-            if let compressed = try? (payloadData as NSData).compressed(using: .zlib) as Data {
+            request.setValue(replayMode, forHTTPHeaderField: "X-Replay-Mode")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: envelope) else {
+                UIApplication.shared.endBackgroundTask(bgTask)
+                return
+            }
+
+            // GZIP Compression (RFC 1952 standard)
+            if let gzipped = jsonData.sankofa_gzipped() {
                 request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-                request.httpBody = compressed
+                request.httpBody = gzipped
             } else {
-                request.httpBody = payloadData
+                request.httpBody = jsonData
             }
 
             URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
