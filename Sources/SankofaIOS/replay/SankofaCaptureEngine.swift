@@ -5,8 +5,8 @@ import UIKit
 /// This enables the `SankofaCaptureCoordinator` to swap engines at runtime
 /// without changing any surrounding code — the Strategy Pattern.
 protocol SankofaCaptureEngine: AnyObject {
-    /// Capture a single frame. Returns `nil` if capture is not possible.
-    func captureFrame() -> SankofaFrame?
+    /// Capture a single frame asynchronously. Returns result via completion.
+    func captureFrame(completion: @escaping (SankofaFrame?) -> Void)
 }
 
 /// A captured frame ready for upload.

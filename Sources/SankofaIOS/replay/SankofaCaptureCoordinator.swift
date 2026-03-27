@@ -60,7 +60,10 @@ final class SankofaCaptureCoordinator {
 
         skipFrames = max(0, Int(60.0 / targetFPS) - 1)
 
-        let link = CADisplayLink(target: self, selector: #selector(tick))
+        // 🚨 Retain Cycle Fix: CADisplayLink strongly retains its target. 
+        // We use a WeakProxy to ensure the Coordinator can be deinitialized.
+        let proxy = WeakProxy(self)
+        let link = CADisplayLink(target: proxy, selector: #selector(WeakProxy.onTick))
         link.add(to: .main, forMode: .common)
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 1, maximum: 30)
         displayLink = link
@@ -75,17 +78,35 @@ final class SankofaCaptureCoordinator {
 
     // MARK: - Capture Tick
 
-    @objc private func tick() {
+    @objc internal func tick() {
         frameCounter += 1
         guard frameCounter > skipFrames else { return }
         frameCounter = 0
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let frame = self.currentEngine.captureFrame() else { return }
+        // The engine grabs the image instantly on the main thread, 
+        // and calls the completion handler when the background compression is done.
+        currentEngine.captureFrame { [weak self] frame in
+            guard let self = self, let frame = frame else { return }
             self.uploader.upload(frame)
         }
     }
+}
 
+// MARK: - WeakProxy
+
+/// Breaks the CADisplayLink retain cycle by holding a weak reference to the target.
+final class WeakProxy {
+    private weak var target: NSObject?
+
+    init(_ target: NSObject) {
+        self.target = target
+    }
+
+    @objc func onTick() {
+        // Forward the selector to the target if it still exists.
+        _ = target?.perform(NSSelectorFromString("tick"))
+    }
+}
     // MARK: - Escalation (Phase 3)
 
     /// Configure the trigger map from remote config.

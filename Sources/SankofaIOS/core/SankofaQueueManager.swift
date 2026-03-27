@@ -25,7 +25,7 @@ final class SankofaQueueManager {
 
     // MARK: - State
 
-    private let db: DatabaseQueue
+    private let db: DatabasePool
     private let logger: SankofaLogger
     private let lock = NSLock()
 
@@ -44,7 +44,11 @@ final class SankofaQueueManager {
         }()
 
         do {
-            db = try DatabaseQueue(path: dbPath)
+            // 🚨 CONCURRENCY FIX: Use DatabasePool instead of DatabaseQueue.
+            // DatabasePool automatically enables WAL (Write-Ahead Logging) mode,
+            // allowing the FlushManager to read batches while the Replay engines
+            // are writing frames simultaneously.
+            db = try DatabasePool(path: dbPath)
             try db.write { db in
                 try db.create(table: QueuedEvent.databaseTableName, ifNotExists: true) { t in
                     t.autoIncrementedPrimaryKey("id")
@@ -53,11 +57,11 @@ final class SankofaQueueManager {
                     t.column("createdAt", .datetime).notNull().defaults(to: Date())
                 }
             }
-            logger.log("💾 SQLite queue opened at \(dbPath)")
+            logger.log("💾 SQLite queue (WAL mode) opened at \(dbPath)")
         } catch {
-            // Fallback: in-memory database so the SDK never crashes.
-            db = try! DatabaseQueue()
-            logger.warn("⚠️ Failed to open SQLite queue, using in-memory: \(error)")
+            // Fallback: in-memory database queue so the SDK never crashes.
+            db = try! DatabasePool()
+            logger.warn("⚠️ Failed to open SQLite pool, using in-memory: \(error)")
         }
     }
 

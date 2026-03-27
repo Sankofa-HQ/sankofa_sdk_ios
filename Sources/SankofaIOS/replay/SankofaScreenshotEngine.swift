@@ -22,56 +22,51 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
 
     // MARK: - SankofaCaptureEngine
 
-    func captureFrame() -> SankofaFrame? {
+    func captureFrame(completion: @escaping (SankofaFrame?) -> Void) {
         guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
-            return nil
+            completion(nil)
+            return
         }
 
-        // Collect sensitive rects BEFORE entering the renderer context.
-        // `view.convert` must run on the main thread.
+        // 1. Collect rects and draw the image on the Main Thread (Very Fast)
         let sensitiveRects = collectSensitiveRects(in: window)
 
-        // ─── In-Memory Canvas ────────────────────────────────────────────────
-        // UIGraphicsImageRenderer creates a detached CoreGraphics context.
-        // The physical display is never touched.
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0 // Keep at 1× to control file size.
-
+        format.scale = 1.0 
         let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
 
         let maskedImage = renderer.image { ctx in
-            // Step A: Draw the current window into our invisible canvas.
-            // `afterScreenUpdates: false` uses the currently committed frame —
-            // fastest, and avoids any pending layout pass.
+            // Draw the current window into our invisible canvas.
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
 
-            // Step B: Paint solid black over every sensitive coordinate.
-            // This happens on the canvas — not on screen.
+            // Paint solid black over every sensitive coordinate.
             ctx.cgContext.setFillColor(UIColor.black.cgColor)
             for rect in sensitiveRects {
                 ctx.cgContext.fill(rect)
             }
         }
-        // ─────────────────────────────────────────────────────────────────────
 
-        // Compress off the main thread to prevent any UI stutter.
-        let capturedImage = maskedImage // Capture for background queue
-        var jpegData: Data? = nil
-        let compressionGroup = DispatchGroup()
-        compressionGroup.enter()
-        DispatchQueue.global(qos: .background).async {
-            jpegData = capturedImage.jpegData(compressionQuality: 0.3)
-            compressionGroup.leave()
+        // 2. FIRE AND FORGET: Push compression to background and DO NOT WAIT.
+        // This ensures the Main UI thread is free to render the next frame instantly.
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let self = self else { return }
+            
+            let jpegData = maskedImage.jpegData(compressionQuality: 0.3)
+            
+            guard let data = jpegData else {
+                completion(nil)
+                return
+            }
+
+            let frame = SankofaFrame(
+                sessionId: self.sessionId,
+                timestamp: Date(),
+                payload: .screenshot(data)
+            )
+            
+            // 3. Return the finished frame via callback
+            completion(frame)
         }
-        compressionGroup.wait()
-
-        guard let data = jpegData else { return nil }
-
-        return SankofaFrame(
-            sessionId: sessionId,
-            timestamp: Date(),
-            payload: .screenshot(data)
-        )
     }
 
     // MARK: - Sensitive Rect Collection

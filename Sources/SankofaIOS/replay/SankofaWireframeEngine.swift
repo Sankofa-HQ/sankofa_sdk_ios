@@ -17,22 +17,32 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         self.sessionId = sessionId
     }
 
-    func captureFrame() -> SankofaFrame? {
+    func captureFrame(completion: @escaping (SankofaFrame?) -> Void) {
         guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
-            return nil
+            completion(nil)
+            return
         }
 
+        // 🚨 MAIN THREAD SAFETY: Reading `view.bounds`, `view.text`, and 
+        // `view.subviews` MUST happen on the main thread.
         let tree = serializeView(window)
 
-        guard let data = try? JSONSerialization.data(withJSONObject: tree) else {
-            return nil
-        }
+        // 🚀 Move expensive JSON serialization to a background thread to keep UI smooth.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            
+            guard let data = try? JSONSerialization.data(withJSONObject: tree) else {
+                completion(nil)
+                return
+            }
 
-        return SankofaFrame(
-            sessionId: sessionId,
-            timestamp: Date(),
-            payload: .wireframe(data)
-        )
+            let frame = SankofaFrame(
+                sessionId: self.sessionId,
+                timestamp: Date(),
+                payload: .wireframe(data)
+            )
+            completion(frame)
+        }
     }
 
     // MARK: - View Tree Serialization

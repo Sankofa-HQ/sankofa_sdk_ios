@@ -18,11 +18,24 @@ final class SankofaReplayUploader {
     }
 
     func upload(_ frame: SankofaFrame) {
+        // 🚨 BACKGROUND PROTECTION: Protect the replay upload context.
+        var bgTask: UIBackgroundTaskIdentifier = .invalid
+        bgTask = UIApplication.shared.beginBackgroundTask {
+            UIApplication.shared.endBackgroundTask(bgTask)
+            bgTask = .invalid
+        }
+
         uploadQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self else { 
+                UIApplication.shared.endBackgroundTask(bgTask)
+                return 
+            }
 
             let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-            guard let url = URL(string: "\(base)/api/v1/replay") else { return }
+            guard let url = URL(string: "\(base)/api/v1/replay") else { 
+                UIApplication.shared.endBackgroundTask(bgTask)
+                return 
+            }
 
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -52,6 +65,9 @@ final class SankofaReplayUploader {
                 } else {
                     self?.logger.log("📹 Frame uploaded (\(frame.sessionId))")
                 }
+                
+                // Done! Tell iOS it can suspend.
+                UIApplication.shared.endBackgroundTask(bgTask)
             }.resume()
         }
     }

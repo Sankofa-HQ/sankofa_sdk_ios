@@ -74,6 +74,15 @@ final class SankofaFlushManager {
             await queueManager.flush(limit: batchSize) { [weak self] batch -> Set<Int64> in
                 guard let self else { return [] }
 
+                // 🚨 BACKGROUND PROTECTION: Tell iOS to give us extra time to
+                // finish the upload before suspending the app ($ app minimized).
+                var bgTask: UIBackgroundTaskIdentifier = .invalid
+                bgTask = UIApplication.shared.beginBackgroundTask {
+                    // Force-quit if we exceed Apple's grace period.
+                    UIApplication.shared.endBackgroundTask(bgTask)
+                    bgTask = .invalid
+                }
+
                 var successIds = Set<Int64>()
 
                 for event in batch {
@@ -111,6 +120,10 @@ final class SankofaFlushManager {
                         self.logger.warn("❌ Network error: \(error.localizedDescription)")
                     }
                 }
+
+                // Finish the background task.
+                UIApplication.shared.endBackgroundTask(bgTask)
+                bgTask = .invalid
 
                 return successIds
             }
