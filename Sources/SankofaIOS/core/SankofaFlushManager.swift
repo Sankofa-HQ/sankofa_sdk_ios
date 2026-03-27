@@ -79,47 +79,56 @@ final class SankofaFlushManager {
                 // finish the upload before suspending the app ($ app minimized).
                 var bgTask: UIBackgroundTaskIdentifier = .invalid
                 bgTask = UIApplication.shared.beginBackgroundTask {
-                    // Force-quit if we exceed Apple's grace period.
                     UIApplication.shared.endBackgroundTask(bgTask)
                     bgTask = .invalid
                 }
 
                 var successIds = Set<Int64>()
-
+                var operations: [[String: Any]] = []
+                
                 for event in batch {
                     guard let payload = try? JSONSerialization.jsonObject(with: event.payload) as? [String: Any] else {
                         successIds.insert(event.id!) // Remove malformed events
                         continue
                     }
+                    
+                    // The backend expects: { "type": "...", "payload": { ... } }
+                    operations.append([
+                        "type": event.type,
+                        "payload": payload
+                    ])
+                }
 
-                    let route: String
-                    switch event.type {
-                    case "alias":  route = "/api/v1/alias"
-                    case "people": route = "/api/v1/people"
-                    default:       route = "/api/v1/track"
+                if operations.isEmpty {
+                    UIApplication.shared.endBackgroundTask(bgTask)
+                    return []
+                }
+
+                let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
+                guard let url = URL(string: "\(base)/api/v1/batch") else {
+                    UIApplication.shared.endBackgroundTask(bgTask)
+                    return []
+                }
+
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+
+                do {
+                    let batchPayload = ["operations": operations]
+                    let body = try JSONSerialization.data(withJSONObject: batchPayload)
+                    request.httpBody = body
+                    
+                    let (_, response) = try await URLSession.shared.data(for: request)
+                    if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                        self.logger.log("✅ Flushed batch of \(operations.count) events")
+                        batch.forEach { if let id = $0.id { successIds.insert(id) } }
+                    } else {
+                        self.logger.warn("❌ Server rejected batch")
                     }
-
-                    let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-                    guard let url = URL(string: "\(base)\(route)") else { continue }
-
-                    var request = URLRequest(url: url)
-                    request.httpMethod = "POST"
-                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-
-                    do {
-                        let body = try JSONSerialization.data(withJSONObject: payload)
-                        request.httpBody = body
-                        let (_, response) = try await URLSession.shared.data(for: request)
-                        if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                            self.logger.log("✅ Sent '\(event.type)'")
-                            successIds.insert(event.id!)
-                        } else {
-                            self.logger.warn("❌ Server rejected '\(event.type)'")
-                        }
-                    } catch {
-                        self.logger.warn("❌ Network error: \(error.localizedDescription)")
-                    }
+                } catch {
+                    self.logger.warn("❌ Batch network error: \(error.localizedDescription)")
                 }
 
                 // Finish the background task.

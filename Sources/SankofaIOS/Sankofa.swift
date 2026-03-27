@@ -96,7 +96,7 @@ public final class Sankofa {
         let payload: [String: Any] = [
             "type": "alias",
             "distinct_id": userId,
-            "anonymous_id": identity.anonymousId,
+            "alias_id": identity.anonymousId,
             "session_id": sessionManager.sessionId,
             "timestamp": ISO8601DateFormatter().string(from: Date()),
         ]
@@ -106,13 +106,18 @@ public final class Sankofa {
     /// Track a custom event with optional properties.
     public func track(_ event: String, properties: [String: Any] = [:]) {
         assertInitialized()
-        var enriched = defaultProperties()
-        enriched["event"] = event
-        enriched["type"] = "track"
-        properties.forEach { enriched[$0.key] = $0.value }
+        
+        let payload: [String: Any] = [
+            "type": "track",
+            "event_name": event,
+            "distinct_id": identity.distinctId,
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "properties": properties,
+            "default_properties": defaultProperties()
+        ]
 
         logger.log("📈 track → \(event)")
-        queueManager.enqueue(enriched)
+        queueManager.enqueue(payload)
 
         // Let the coordinator check escalation triggers.
         captureCoordinator.onEvent(event)
@@ -121,11 +126,18 @@ public final class Sankofa {
     /// Set profile attributes for the current user.
     public func setPerson(name: String? = nil, email: String? = nil, properties: [String: Any] = [:]) {
         assertInitialized()
-        var payload = defaultProperties()
-        payload["type"] = "people"
-        if let name { payload["$name"] = name }
-        if let email { payload["$email"] = email }
-        properties.forEach { payload[$0.key] = $0.value }
+        
+        var personProps = properties
+        if let name { personProps["$name"] = name }
+        if let email { personProps["$email"] = email }
+        
+        let payload: [String: Any] = [
+            "type": "people",
+            "distinct_id": identity.distinctId,
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "properties": personProps,
+            "default_properties": defaultProperties()
+        ]
 
         logger.log("👤 setPerson")
         queueManager.enqueue(payload)
@@ -148,9 +160,7 @@ public final class Sankofa {
 
     private func defaultProperties() -> [String: Any] {
         var props: [String: Any] = [
-            "distinct_id": identity.distinctId,
             "session_id": sessionManager.sessionId,
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
             "$lib": "sankofa-ios",
             "$lib_version": "1.0.0",
         ]
