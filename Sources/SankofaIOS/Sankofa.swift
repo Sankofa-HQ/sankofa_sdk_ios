@@ -17,12 +17,17 @@ import UIKit
 /// // Identify a logged-in user:
 /// Sankofa.shared.identify(userId: "user_99")
 /// ```
-public final class Sankofa {
+@objc(SankofaSankofa)
+public final class Sankofa: NSObject {
 
     // MARK: - Singleton
 
+    @objc
     public static let shared = Sankofa()
-    private init() {}
+    
+    private override init() {
+        super.init()
+    }
 
     // MARK: - Internal State
 
@@ -69,6 +74,7 @@ public final class Sankofa {
     // MARK: - Public API
 
     /// Initialise the SDK. Call this once at app start.
+    @objc
     public func initialize(apiKey: String, config: SankofaConfig = SankofaConfig()) {
         guard !isInitialized else {
             logger.warn("Sankofa already initialized; ignoring duplicate call.")
@@ -88,6 +94,7 @@ public final class Sankofa {
     }
 
     /// Identify a user by their unique ID. Merges anonymous history into the profile.
+    @objc
     public func identify(userId: String) {
         assertInitialized()
         identity.identify(userId: userId)
@@ -104,6 +111,7 @@ public final class Sankofa {
     }
 
     /// Track a custom event with optional properties.
+    @objc
     public func track(_ event: String, properties: [String: Any] = [:]) {
         assertInitialized()
         
@@ -124,6 +132,7 @@ public final class Sankofa {
     }
 
     /// Set profile attributes for the current user.
+    @objc
     public func setPerson(name: String? = nil, email: String? = nil, properties: [String: Any] = [:]) {
         assertInitialized()
         
@@ -144,6 +153,7 @@ public final class Sankofa {
     }
 
     /// Reset identity. Call on logout to start a fresh anonymous session.
+    @objc
     public func reset() {
         assertInitialized()
         identity.reset()
@@ -152,6 +162,7 @@ public final class Sankofa {
     }
 
     /// Immediately flush all queued events to the backend.
+    @objc
     public func flush() {
         flushManager.flush()
     }
