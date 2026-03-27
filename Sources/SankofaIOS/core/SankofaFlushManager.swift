@@ -113,7 +113,7 @@ final class SankofaFlushManager {
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+                request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
 
                 do {
                     let batchPayload = ["operations": operations]

@@ -92,7 +92,7 @@ public final class Sankofa: NSObject {
         coordinator.uploader.setDistinctId(identity.distinctId)
         self.captureCoordinator = coordinator
 
-        logger.log("✅ Sankofa initialized (endpoint: \(config.endpoint))")
+        logger.log("✅ [v2] Sankofa initialized (endpoint: \(config.endpoint))")
 
         observer.start()
 

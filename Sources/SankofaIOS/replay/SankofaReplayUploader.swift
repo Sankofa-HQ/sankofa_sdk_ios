@@ -51,36 +51,39 @@ final class SankofaReplayUploader {
 
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
-            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
             request.setValue(frame.sessionId, forHTTPHeaderField: "X-Session-Id")
             request.setValue(distinctId, forHTTPHeaderField: "X-Distinct-Id")
             request.setValue(String(currentChunk), forHTTPHeaderField: "X-Chunk-Index")
-            request.setValue(
-                ISO8601DateFormatter().string(from: frame.timestamp),
-                forHTTPHeaderField: "x-frame-timestamp"
-            )
-
+            request.setValue("screenshot", forHTTPHeaderField: "X-Replay-Mode")
+            
+            let payloadData: Data
             switch frame.payload {
             case .wireframe(let data):
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue("wireframe", forHTTPHeaderField: "X-Replay-Mode")
-                request.httpBody = data
+                payloadData = data
             case .screenshot(let data):
                 request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-                request.setValue("screenshot", forHTTPHeaderField: "X-Replay-Mode")
-                request.httpBody = data
+                payloadData = data
+            }
+
+            // GZIP Compression (Backend compatibility)
+            if let compressed = try? (payloadData as NSData).compressed(using: .zlib) as Data {
+                request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+                request.httpBody = compressed
+            } else {
+                request.httpBody = payloadData
             }
 
             URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
                 if let error {
-                    self?.logger.warn("❌ Replay upload failed: \(error.localizedDescription)")
+                    self?.logger.warn("❌ [v2] Replay upload failed: \(error.localizedDescription)")
                 } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    self?.logger.warn("❌ Replay upload HTTP \(http.statusCode) for chunk \(currentChunk)")
+                    self?.logger.warn("❌ [v2] Replay upload HTTP \(http.statusCode) (Chunk \(currentChunk))")
                 } else {
-                    self?.logger.log("📹 Frame uploaded (\(frame.sessionId)) chunk \(currentChunk)")
+                    self?.logger.log("📹 [v2] Frame uploaded (\(frame.sessionId)) chunk \(currentChunk)")
                 }
                 
-                // Done! Tell iOS it can suspend.
                 UIApplication.shared.endBackgroundTask(bgTask)
             }.resume()
         }
