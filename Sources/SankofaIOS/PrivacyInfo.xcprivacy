@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PrivacyInfo.xcprivacy — Sankofa iOS SDK Privacy Manifest
+  
+  Apple requires all third-party SDKs to include a Privacy Manifest (PrivacyInfo.xcprivacy)
+  since Spring 2024. Failure to include this file will cause App Store Review rejection.
+  
+  This file declares:
+  1. What data the SDK accesses (required reason APIs).
+  2. What data the SDK collects and how it is used.
+  3. Confirmation that no Objective-C method swizzling is used.
+-->
+<plist version="1.0">
+<dict>
+    <!-- ─── Required Reason APIs ────────────────────────────────────────── -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!-- UserDefaults: Used to store anonymous ID and session state -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <!-- CA92.1: Access info from the same app that wrote it -->
+                <string>CA92.1</string>
+            </array>
+        </dict>
+        <!-- File timestamp: GRDB uses file creation dates for DB management -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <!-- C617.1: Inside app container -->
+                <string>C617.1</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- ─── Data Collection ─────────────────────────────────────────────── -->
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array>
+        <!-- Device ID: Used to link sessions across app launches -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeDeviceID</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+        <!-- Product Interaction: Custom events and navigation data -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeProductInteraction</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- ─── Swizzling Declaration ───────────────────────────────────────── -->
+    <!-- Sankofa does NOT use Objective-C method swizzling.                  -->
+    <!-- All lifecycle hooks use NotificationCenter; all touch capture uses  -->
+    <!-- CADisplayLink and transparent UIWindow overlays.                     -->
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyTracking</key>
+    <false/>
+</dict>
+</plist>
