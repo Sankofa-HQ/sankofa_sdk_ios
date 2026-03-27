@@ -12,9 +12,21 @@ final class SankofaDeviceInfo {
         props["$os"] = "iOS"
         props["$os_version"] = device.systemVersion
         props["$device_model"] = Self.deviceModel()
-        props["$device_name"] = device.name
-        props["$screen_width"] = Int(UIScreen.main.bounds.width)
-        props["$screen_height"] = Int(UIScreen.main.bounds.height)
+        props["$device_manufacturer"] = "Apple"
+        
+        #if targetEnvironment(simulator)
+        props["$is_simulator"] = "true"
+        #else
+        props["$is_simulator"] = "false"
+        #endif
+
+        let bounds = UIScreen.main.nativeBounds
+        props["$screen_width"] = Int(bounds.width)
+        props["$screen_height"] = Int(bounds.height)
+        
+        props["$locale"] = Locale.current.identifier
+        props["$timezone"] = TimeZone.current.identifier
+        
         props["$app_version"] = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         props["$app_build"] = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
     }

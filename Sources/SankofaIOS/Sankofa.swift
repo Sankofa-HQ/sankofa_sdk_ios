@@ -106,7 +106,7 @@ public final class Sankofa: NSObject {
     public func identify(userId: String) {
         assertInitialized()
         identity.identify(userId: userId)
-        logger.log("👤 Identified user: \(userId)")
+        logger.log("👤 [v2] Identified user: \(userId)")
         
         // Update uploader with new identity
         captureCoordinator?.uploader.setDistinctId(userId)
@@ -115,8 +115,13 @@ public final class Sankofa: NSObject {
             "type": "alias",
             "distinct_id": userId,
             "alias_id": identity.anonymousId,
-            "session_id": sessionManager.sessionId,
+            "properties": [
+                "$session_id": sessionManager.sessionId
+            ],
+            "default_properties": defaultProperties(),
             "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "message_id": UUID().uuidString.lowercased(),
+            "lib_version": "ios-1.0.0"
         ]
         queueManager?.enqueue(payload)
     }
@@ -127,18 +132,21 @@ public final class Sankofa: NSObject {
         assertInitialized()
         
         var eventProps = properties
-        eventProps["$event_name"] = event // Promote to property for dashboard display
+        eventProps["$event_name"] = event
+        eventProps["$session_id"] = sessionManager.sessionId
         
         let payload: [String: Any] = [
             "type": "track",
             "event_name": event,
             "distinct_id": identity.distinctId,
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
             "properties": eventProps,
-            "default_properties": defaultProperties()
+            "default_properties": defaultProperties(),
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "message_id": UUID().uuidString.lowercased(),
+            "lib_version": "ios-1.0.0"
         ]
 
-        logger.log("📈 track → \(event)")
+        logger.log("📈 [v2] track → \(event)")
         queueManager?.enqueue(payload)
 
         // Let the coordinator check escalation triggers.
@@ -153,16 +161,19 @@ public final class Sankofa: NSObject {
         var personProps = properties
         if let name { personProps["$name"] = name }
         if let email { personProps["$email"] = email }
+        personProps["$session_id"] = sessionManager.sessionId
         
         let payload: [String: Any] = [
             "type": "people",
             "distinct_id": identity.distinctId,
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
             "properties": personProps,
-            "default_properties": defaultProperties()
+            "default_properties": defaultProperties(),
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "message_id": UUID().uuidString.lowercased(),
+            "lib_version": "ios-1.0.0"
         ]
 
-        logger.log("👤 setPerson")
+        logger.log("👤 [v2] setPerson")
         queueManager?.enqueue(payload)
     }
 
@@ -185,7 +196,6 @@ public final class Sankofa: NSObject {
 
     private func defaultProperties() -> [String: Any] {
         var props: [String: Any] = [
-            "session_id": sessionManager.sessionId,
             "$lib": "sankofa-ios",
             "$lib_version": "1.0.0",
         ]
