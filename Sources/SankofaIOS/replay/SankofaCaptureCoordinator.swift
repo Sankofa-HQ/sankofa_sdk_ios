@@ -80,6 +80,7 @@ final class SankofaCaptureCoordinator {
 // MARK: - WeakProxy
 
 /// Breaks the CADisplayLink retain cycle by holding a weak reference to the target.
+@MainActor
 final class WeakProxy {
     private weak var target: SankofaCaptureCoordinator?
 
