@@ -186,4 +186,3 @@ struct EscalationConfig {
     var triggers: Set<String>
     var highFidelityDuration: TimeInterval
 }
-
