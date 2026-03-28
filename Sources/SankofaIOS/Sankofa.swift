@@ -17,6 +17,7 @@ import UIKit
 /// // Identify a logged-in user:
 /// Sankofa.shared.identify(userId: "user_99")
 /// ```
+@MainActor
 @objc(SankofaSankofa)
 public final class Sankofa: NSObject {
 
