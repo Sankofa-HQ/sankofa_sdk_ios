@@ -115,8 +115,8 @@ final class SankofaReplayUploader {
                     
                     return [
                         "type": type,
-                        "x": safeDouble(i.x),
-                        "y": safeDouble(i.y),
+                        "x": self.safeDouble(i.x),
+                        "y": self.safeDouble(i.y),
                         "timestamp": Int64(i.timestamp.timeIntervalSince1970 * 1000)
                     ]
                 }
