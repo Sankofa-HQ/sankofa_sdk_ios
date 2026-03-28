@@ -104,14 +104,14 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
         css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
         css += "box-sizing: border-box; overflow: hidden; pointer-events: none; "
-        css += "z-index: \(depth); " // Ensure nested views respect layering
+        css += "z-index: \(depth); " // PostHog Logic: Enforce layering
         
-        // Background Color Extraction
+        // Background & Visibility
         let bgColor = view.backgroundColor?.sankofa_toHexString() ?? "transparent"
         if bgColor != "transparent" {
             css += "background-color: \(bgColor); "
         } else if view is UIWindow {
-            css += "background-color: #FFFFFF; " // Fallback for root
+            css += "background-color: #FFFFFF; "
         }
         
         if view.layer.cornerRadius > 0 {
@@ -131,30 +131,31 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         var textContent: String? = nil
         var attributes: [String: String] = [:]
         
-        // 🎨 2. COMPONENT MAPPING
+        // 🎨 2. COMPONENT MAPPING (The PostHog "Heart")
         if let label = view as? UILabel {
             tagName = "div" 
             textContent = label.text ?? label.attributedText?.string
             let fontSize = max(8, Int(label.font.pointSize))
             var textColor = label.textColor.sankofa_toHexString()
             
-            // Contrast Check / Fallback
+            // PostHog Contrast Hack: Ensure text isn't lost on same-color backgrounds
             if textColor == "#FFFFFF" && (bgColor == "transparent" || bgColor == "#FFFFFF") {
                 textColor = "#333333" 
             }
             
-            var align = "left"
-            var justify = "flex-start"
-            if label.textAlignment == .center { align = "center"; justify = "center" }
-            else if label.textAlignment == .right { align = "right"; justify = "flex-end" }
+            let alignMapping: [NSTextAlignment: (String, String)] = [
+                .center: ("center", "center"),
+                .right: ("right", "flex-end"),
+                .justified: ("justify", "flex-start")
+            ]
+            let (align, justify) = alignMapping[label.textAlignment] ?? ("left", "flex-start")
             
             css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; line-height: 1.2; text-align: \(align); display: flex; align-items: center; justify-content: \(justify); white-space: pre-wrap; word-break: break-all; "
         } else if let button = view as? UIButton {
             tagName = "button"
-            textContent = button.currentTitle ?? button.titleLabel?.text
+            textContent = button.currentTitle ?? button.titleLabel?.text ?? button.attributedTitle(for: .normal)?.string
             let fontSize = Int(button.titleLabel?.font.pointSize ?? 16)
             let textColor = button.titleLabel?.textColor?.sankofa_toHexString() ?? "#007AFF"
-            // Use button background if present
             let btnBg = button.backgroundColor?.sankofa_toHexString() ?? "transparent"
             css += "color: \(textColor); background-color: \(btnBg); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; border: none; outline: none; display: flex; align-items: center; justify-content: center; cursor: pointer; "
             if button.layer.cornerRadius > 0 { css += "border-radius: \(Int(button.layer.cornerRadius))px; " }
@@ -171,20 +172,46 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         } else if let imgView = view as? UIImageView {
             tagName = "div"
             css += "background-color: #F2F2F7; border: 1px solid #D1D1D6; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #8E8E93; font-family: sans-serif; "
-            if imgView.image != nil {
-                textContent = "Image"
-            }
+            if imgView.image != nil { textContent = "Image" }
             if imgView.layer.cornerRadius > 0 { css += "border-radius: \(Int(imgView.layer.cornerRadius))px; " }
+        } else if let progress = view as? UIProgressView {
+            tagName = "div"
+            css += "background-color: #E5E5EA; border-radius: 4px; "
+            let progressWidth = Int(frame.width * CGFloat(progress.progress))
+            let progressColor = progress.progressTintColor?.sankofa_toHexString() ?? "#007AFF"
+            // Use nodeIdCounter correctly for nested pseudo-node
+            let barId = nodeIdCounter
+            nodeIdCounter += 1
+            children.append([
+                "id": barId,
+                "type": 2,
+                "tagName": "div",
+                "attributes": ["style": "position: absolute; left: 0; top: 0; height: 100%; width: \(progressWidth)px; background-color: \(progressColor); border-radius: 4px; "],
+                "childNodes": []
+            ])
         }
-        
-        // 🚜 3. RECURSION
+
+        // 🚜 3. RECURSION (Subviews)
         for subview in view.subviews {
             if !subview.isHidden && subview.alpha > 0.01 {
                 children.append(crawlForRRWeb(view: subview, window: window, depth: depth + 1))
             }
         }
         
-        // 📝 4. TEXT NODES
+        // 🚜 4. SwiftUI/Internal Text Detection (PostHog Hack)
+        // If we haven't found text yet, and it's a "DrawingView" (SwiftUI), try to find it.
+        if textContent == nil {
+            let className = String(describing: type(of: view))
+            if className.contains("DrawingView") || className.contains("TextView") {
+                // We recursively search for values in internal accessibility or descriptions
+                // for SwiftUI views where direct text access is blocked.
+                if let val = view.accessibilityLabel ?? view.accessibilityValue {
+                    textContent = val
+                }
+            }
+        }
+
+        // 📝 5. TEXT NODES
         if let text = textContent, !text.isEmpty {
             let tNodeId = nodeIdCounter
             nodeIdCounter += 1
