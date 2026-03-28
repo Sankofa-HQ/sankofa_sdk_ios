@@ -22,6 +22,8 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
 
     // MARK: - SankofaCaptureEngine
 
+    // KILLER 4 (Concurrency): @MainActor ensures this ONLY runs on the UI thread
+    @MainActor
     func captureFrame(completion: @escaping (SankofaFrame?) -> Void) {
         guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
             completion(nil)
@@ -32,7 +34,7 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
         let sensitiveRects = collectSensitiveRects(in: window)
 
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 0.5 
+        format.scale = 0.6
         let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
 
         let maskedImage = renderer.image { ctx in

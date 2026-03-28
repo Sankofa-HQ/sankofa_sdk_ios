@@ -13,6 +13,8 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         self.sessionId = sessionId
     }
 
+    // KILLER 4 (Concurrency): @MainActor prevents Main Thread Checker crashes
+    @MainActor
     func captureFrame(completion: @escaping (SankofaFrame?) -> Void) {
         guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
             completion(nil)

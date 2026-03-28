@@ -7,17 +7,15 @@ import UIKit
 /// Runs compression and upload on a background queue.
 final class SankofaReplayUploader {
 
-    private let apiKey: String
-    private let endpoint: String
+    private let queueManager: SankofaQueueManager
     private let logger: SankofaLogger
     private let uploadQueue = DispatchQueue(label: "dev.sankofa.replay.upload", qos: .background)
     
     private var chunkIndex: Int = 0
     private var distinctId: String = "anonymous"
 
-    init(apiKey: String, endpoint: String, logger: SankofaLogger) {
-        self.apiKey = apiKey
-        self.endpoint = endpoint
+    init(queueManager: SankofaQueueManager, logger: SankofaLogger) {
+        self.queueManager = queueManager
         self.logger = logger
     }
     
@@ -26,36 +24,12 @@ final class SankofaReplayUploader {
     }
 
     func upload(_ frame: SankofaFrame, deviceContext: [String: Any]? = nil, interactions: [SankofaTouchInterceptor.Interaction] = []) {
-        // 🚨 BACKGROUND PROTECTION: Protect the replay upload context.
-        var bgTask: UIBackgroundTaskIdentifier = .invalid
-        bgTask = UIApplication.shared.beginBackgroundTask {
-            UIApplication.shared.endBackgroundTask(bgTask)
-            bgTask = .invalid
-        }
-
         uploadQueue.async { [weak self] in
-            guard let self else { 
-                UIApplication.shared.endBackgroundTask(bgTask)
-                return 
-            }
-
-            let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-            // EE Ingestion uses /api/replay/chunk
-            guard let url = URL(string: "\(base)/api/replay/chunk") else { 
-                UIApplication.shared.endBackgroundTask(bgTask)
-                return 
-            }
+            guard let self else { return }
 
             let currentChunk = self.chunkIndex
             self.chunkIndex += 1
 
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-            request.setValue(frame.sessionId, forHTTPHeaderField: "X-Session-Id")
-            request.setValue(distinctId, forHTTPHeaderField: "X-Distinct-Id")
-            request.setValue(String(currentChunk), forHTTPHeaderField: "X-Chunk-Index")
-            
             // 🚀 INTERACTION PROCESSING: Find the latest interaction for frame-level metadata.
             let latestInteraction = interactions.last
             
@@ -122,37 +96,18 @@ final class SankofaReplayUploader {
                 }
             }
 
-            request.setValue(replayMode, forHTTPHeaderField: "X-Replay-Mode")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // KILLER 2 (OOM Cleanup): Immediately encode and flush to SQLite, DO NOT hold in memory.
+            // We tag it as 'replay_chunk' so the FlushManager knows where to send it.
+            var finalPayload = envelope
+            finalPayload["_distinct_id"] = self.distinctId
+            finalPayload["_session_id"] = frame.sessionId
+            finalPayload["_chunk_index"] = currentChunk
+            finalPayload["_replay_mode"] = replayMode
 
-            guard let jsonData = try? JSONSerialization.data(withJSONObject: envelope) else {
-                UIApplication.shared.endBackgroundTask(bgTask)
-                return
-            }
-
-            // 📦 GZIP COMPRESSION: 
-            // We use GZIP to ensure compatibility with the dashboard's `findGzipStart` 
-            // logic, which sniffs for 0x1F 0x8B. By gzipping, we force this header 
-            // to the start of the file, avoiding false positives in the middle of 
-            // plain JSON which were causing SyntaxErrors.
-            let uploadData = jsonData.sankofa_gzipped() ?? jsonData
-            if uploadData.count < jsonData.count {
-                request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-            }
-            request.httpBody = uploadData
-
-            URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
-                if let error = error {
-                    self?.logger.warn("❌ [v2] Replay upload failed: \(error.localizedDescription)")
-                } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    self?.logger.warn("❌ [v2] Replay upload HTTP \(http.statusCode) (Chunk \(currentChunk))")
-                } else {
-                    self?.logger.log("📹 [v2] Frame uploaded (\(frame.sessionId)) chunk \(currentChunk)")
-                }
-                
-                UIApplication.shared.endBackgroundTask(bgTask)
-            }.resume()
+            self.queueManager.enqueue(finalPayload, type: "replay_chunk")
+            self.logger.log("📹 [v2] Frame queued (\(frame.sessionId)) chunk \(currentChunk)")
         }
+    }
     }
 
     private func safeDouble(_ value: CGFloat) -> Double {
