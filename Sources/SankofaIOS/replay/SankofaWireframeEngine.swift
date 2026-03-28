@@ -113,7 +113,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             tagName = "button"
             textContent = button.currentTitle
             let fontSize = Int(button.titleLabel?.font.pointSize ?? 16)
-            let textColor = button.titleLabel?.textColor.sankofa_toHexString() ?? "#007AFF"
+            let textColor = button.titleLabel?.textColor?.sankofa_toHexString() ?? "#007AFF"
             css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; border: none; outline: none; background-color: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; "
             
         } else if let textField = view as? UITextField {
@@ -187,6 +187,19 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 }
 
 // MARK: - Visual Helpers
+
+extension UIColor {
+    func sankofa_toHexString() -> String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        if self.getRed(&r, green: &g, blue: &b, alpha: &a) {
+            return String(format: "#%02X%02X%02X",
+                          Int(r * 255),
+                          Int(g * 255),
+                          Int(b * 255))
+        }
+        return "#FFFFFF"
+    }
+}
 
 extension CGColor {
     func sankofa_toHexString() -> String {

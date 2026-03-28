@@ -193,6 +193,7 @@ public final class Sankofa: NSObject {
         var props: [String: Any] = [
             "$lib": "sankofa-ios",
             "$lib_version": "1.0.0",
+            "$session_id": sessionManager.sessionId
         ]
         deviceInfo.inject(into: &props)
         return props
