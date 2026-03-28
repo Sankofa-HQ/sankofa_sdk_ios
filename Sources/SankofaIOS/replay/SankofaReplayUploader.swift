@@ -108,7 +108,6 @@ final class SankofaReplayUploader {
             self.logger.log("📹 [v2] Frame queued (\(frame.sessionId)) chunk \(currentChunk)")
         }
     }
-    }
 
     private func safeDouble(_ value: CGFloat) -> Double {
         let d = Double(value)
