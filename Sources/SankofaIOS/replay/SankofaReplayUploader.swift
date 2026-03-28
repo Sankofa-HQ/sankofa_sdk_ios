@@ -34,7 +34,6 @@ final class SankofaReplayUploader {
             let latestInteraction = interactions.last
             
             // 📦 DYNAMIC PAYLOAD: Wrap in the dashboard-expected JSON schema.
-            var envelope: [String: Any] = [:]
             // 🎯 THE CHEAT CODE: Extract the rrweb event from the payload.
             guard case .rrwebEvent(let event) = frame.payload else { return }
             
