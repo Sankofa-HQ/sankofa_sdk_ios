@@ -97,16 +97,15 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 
     private func typeName(of view: UIView) -> String {
         switch view {
-        case is UILabel:          return "Label"
-        case is UIButton:         return "Button"
-        case is UITextField:      return "TextField"
-        case is UITextView:       return "TextView"
-        case is UIImageView:      return "Image"
-        case is UIScrollView:     return "ScrollView"
-        case is UISwitch:         return "Switch"
-        case is UISlider:         return "Slider"
-        case is UITableView:      return "TableView"
-        case is UICollectionView: return "CollectionView"
+        case is UILabel:          return "text"
+        case is UIButton:         return "button"
+        case is UITextField:      return "text" // Map to text for now
+        case is UITextView:       return "text" // Map to text for now
+        case is UIImageView:      return "media"
+        case is UISwitch:         return "button"
+        case is UISlider:         return "media"
+        case is UITableView:      return "View" // Generic base
+        case is UICollectionView: return "View" // Generic base
         default:                  return "View"
         }
     }

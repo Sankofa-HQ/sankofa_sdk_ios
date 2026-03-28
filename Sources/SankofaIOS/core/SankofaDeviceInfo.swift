@@ -33,8 +33,8 @@ final class SankofaDeviceInfo {
 
     func deviceContext() -> [String: Any] {
         let screen = UIScreen.main
-        let bounds = screen.nativeBounds
-        let scale = screen.nativeScale
+        let bounds = screen.bounds // logical points
+        let scale = screen.scale
         
         return [
             "screen_width": Int(bounds.width),
