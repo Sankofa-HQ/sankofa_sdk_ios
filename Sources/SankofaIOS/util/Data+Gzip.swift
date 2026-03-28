@@ -20,17 +20,22 @@ extension Data {
         guard status == Z_OK else { return nil }
 
         var compressed = Data(capacity: self.count / 2)
-        let bufferSize = 4096
+        let bufferSize = 32768
         let buffer = UnsafeMutablePointer<Bytef>.allocate(capacity: bufferSize)
         defer {
             deflateEnd(&stream)
             buffer.deallocate()
         }
 
-        while stream.avail_out == 0 {
+        // Loop until deflate reports Z_STREAM_END (all input consumed and flushed)
+        var deflateStatus: Int32 = Z_OK
+        while deflateStatus != Z_STREAM_END {
             stream.next_out = buffer
             stream.avail_out = uint(bufferSize)
-            deflate(&stream, Z_FINISH)
+            deflateStatus = deflate(&stream, Z_FINISH)
+            guard deflateStatus == Z_OK || deflateStatus == Z_STREAM_END else {
+                return nil // Compression error
+            }
             let count = bufferSize - Int(stream.avail_out)
             if count > 0 {
                 compressed.append(buffer, count: count)
