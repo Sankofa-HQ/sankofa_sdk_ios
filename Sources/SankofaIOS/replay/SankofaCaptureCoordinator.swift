@@ -10,6 +10,7 @@ final class SankofaCaptureCoordinator {
 
     // MARK: - Config
 
+    private let initialMode: SankofaCaptureMode
     private let maskAllInputs: Bool
     let uploader: SankofaReplayUploader
     private var sessionId: String = ""
@@ -39,6 +40,7 @@ final class SankofaCaptureCoordinator {
     // MARK: - Init
 
     init(mode: SankofaCaptureMode, maskAllInputs: Bool, uploader: SankofaReplayUploader) {
+        self.initialMode = mode
         self.maskAllInputs = maskAllInputs
         self.uploader = uploader
         // Default engine based on config
@@ -53,7 +55,9 @@ final class SankofaCaptureCoordinator {
         self.sessionId = sessionId.isEmpty ? "session_\(UUID().uuidString)" : sessionId
         wireframeEngine = SankofaWireframeEngine(sessionId: self.sessionId)
         screenshotEngine = SankofaScreenshotEngine(sessionId: self.sessionId, maskAllInputs: maskAllInputs)
-        currentEngine = wireframeEngine
+        
+        // Select initial engine based on configuration
+        currentEngine = (initialMode == .wireframe) ? wireframeEngine : screenshotEngine
 
         skipFrames = max(0, Int(60.0 / targetFPS) - 1)
         
