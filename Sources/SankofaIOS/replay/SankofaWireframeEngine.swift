@@ -98,28 +98,39 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         
         let frame = view.frame
         var children: [[String: Any]] = []
-        let traits = window.traitCollection // 🚨 Critical for Dynamic Colors
+        let traits = window.traitCollection
         
-        // 🎨 1. CORE CSS
+        // 🎨 1. CORE CSS + PREMIUM AESTHETICS
         var css = "position: absolute; "
         css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
         css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
-        css += "box-sizing: border-box; overflow: hidden; pointer-events: none; "
-        css += "z-index: \(depth); "
+        css += "box-sizing: border-box; overflow: visible; pointer-events: none; "
+        css += "z-index: \(depth * 10); " // Increase spacing to prevent clipping
         
-        // Background Resolution
-        if let bgColor = view.backgroundColor?.resolvedColor(with: traits).sankofa_toHexString(), bgColor != "transparent" {
+        // Background & Gradients
+        if let gradientLayer = view.layer as? CAGradientLayer, let colors = gradientLayer.colors as? [CGColor] {
+            let hexColors = colors.map { UIColor(cgColor: $0).resolvedColor(with: traits).sankofa_toHexString() }
+            css += "background: linear-gradient(180deg, \(hexColors.joined(separator: ", "))); "
+        } else if let bgColor = view.backgroundColor?.resolvedColor(with: traits).sankofa_toHexString(), bgColor != "transparent" {
             css += "background-color: \(bgColor); "
         } else if view is UIWindow {
-            let winBg = traits.userInterfaceStyle == .dark ? "#1C1C1E" : "#FFFFFF"
-            css += "background-color: \(winBg); "
+            css += "background-color: \(traits.userInterfaceStyle == .dark ? "#1C1C1E" : "#F2F2F7"); "
         }
         
+        // Borders & Radius
         if view.layer.cornerRadius > 0 { css += "border-radius: \(Int(view.layer.cornerRadius))px; " }
         if view.layer.borderWidth > 0 {
             let borderColor = view.layer.borderColor != nil ? UIColor(cgColor: view.layer.borderColor!).resolvedColor(with: traits).sankofa_toHexString() : "#E5E5EA"
             css += "border: \(Int(view.layer.borderWidth))px solid \(borderColor); "
         }
+        
+        // ✨ PREMIUM: Shadows
+        if view.layer.shadowOpacity > 0 {
+            let sColor = view.layer.shadowColor != nil ? UIColor(cgColor: view.layer.shadowColor!).resolvedColor(with: traits).sankofa_toHexString() : "#000000"
+            let sOpacity = view.layer.shadowOpacity
+            css += "box-shadow: \(Int(view.layer.shadowOffset.width))px \(Int(view.layer.shadowOffset.height))px \(Int(view.layer.shadowRadius))px rgba(\(sColor), \(sOpacity)); "
+        }
+        
         if view.alpha < 0.99 { css += "opacity: \(String(format: "%.2f", view.alpha)); " }
 
         var tagName = "div"
@@ -131,6 +142,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             tagName = "div" 
             textContent = label.text ?? label.attributedText?.string
             let fontSize = max(8, Int(label.font.pointSize))
+            let weight = label.font.fontDescriptor.symbolicTraits.contains(.traitBold) ? "bold" : "normal"
             let textColor = label.textColor.resolvedColor(with: traits).sankofa_toHexString()
             
             let alignMapping: [NSTextAlignment: (String, String)] = [
@@ -138,33 +150,35 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
                 .right: ("right", "flex-end")
             ]
             let (align, justify) = alignMapping[label.textAlignment] ?? ("left", "flex-start")
-            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; line-height: 1.2; text-align: \(align); display: flex; align-items: center; justify-content: \(justify); white-space: pre-wrap; word-break: break-all; "
+            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; font-weight: \(weight); line-height: 1.2; text-align: \(align); display: flex; align-items: center; justify-content: \(justify); white-space: pre-wrap; word-break: break-all; "
         } else if let button = view as? UIButton {
             tagName = "button"
             textContent = button.currentTitle ?? button.titleLabel?.text ?? button.attributedTitle(for: .normal)?.string
-            let fontSize = Int(button.titleLabel?.font.pointSize ?? 16)
             let textColor = button.titleLabel?.textColor?.resolvedColor(with: traits).sankofa_toHexString() ?? "#007AFF"
             let btnBg = button.backgroundColor?.resolvedColor(with: traits).sankofa_toHexString() ?? "transparent"
-            css += "color: \(textColor); background-color: \(btnBg); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; border: none; outline: none; display: flex; align-items: center; justify-content: center; position: relative; "
+            css += "color: \(textColor); background-color: \(btnBg); font-family: -apple-system, system-ui, sans-serif; font-weight: 600; border: none; outline: none; display: flex; align-items: center; justify-content: center; position: relative; "
+            
             if let img = button.currentImage {
+                let tint = button.tintColor?.resolvedColor(with: traits) ?? .black
                 let bNodeId = nodeIdCounter
                 nodeIdCounter += 1
                 children.append([
                     "id": bNodeId,
                     "type": 2,
                     "tagName": "img",
-                    "attributes": ["src": "data:image/png;base64,\(img.sankofa_toBase64())", "style": "max-height: 70%; max-width: 70%; "],
+                    "attributes": ["src": "data:image/png;base64,\(img.sankofa_toBase64(tintColor: tint))", "style": "max-height: 80%; max-width: 80%; object-fit: contain; "],
                     "childNodes": []
                 ])
             }
         } else if let imgView = view as? UIImageView, let img = imgView.image {
             tagName = "img"
-            attributes["src"] = "data:image/png;base64,\(img.sankofa_toBase64())"
+            let tint = imgView.tintColor?.resolvedColor(with: traits) ?? .black
+            attributes["src"] = "data:image/png;base64,\(img.sankofa_toBase64(tintColor: tint))"
             css += "object-fit: contain; "
         } else if let textField = view as? UITextField {
             tagName = "input"
             let textColor = textField.textColor?.resolvedColor(with: traits).sankofa_toHexString() ?? "#000000"
-            css += "color: \(textColor); padding: 0 8px; border: 1px solid #ccc; background-color: #fff; "
+            css += "color: \(textColor); padding: 0 12px; border-radius: 8px; border: 1px solid #E5E5EA; background-color: #fff; font-size: 14px; "
             if textField.isSecureTextEntry || maskAllInputs {
                 attributes["type"] = "password"; attributes["value"] = "••••••••"
             } else {
@@ -179,14 +193,9 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             }
         }
         
-        // 🚜 4. SwiftUI/Internal Text Detection (PostHog Hack)
+        // 🚜 4. SwiftUI Reflection (The "Do It Well" Hack)
         if textContent == nil {
-            let className = String(describing: type(of: view))
-            if className.contains("DrawingView") || className.contains("TextView") {
-                if let val = view.accessibilityLabel ?? view.accessibilityValue {
-                    textContent = val
-                }
-            }
+            textContent = self.extractSwiftUIText(from: view)
         }
 
         // 📝 5. TEXT NODES
@@ -211,6 +220,31 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         ]
     }
 
+    /// Uses Reflection to find text inside SwiftUI views
+    private func extractSwiftUIText(from view: UIView) -> String? {
+        // 1. Check Accessibility first
+        if let val = view.accessibilityLabel ?? view.accessibilityValue, !val.isEmpty {
+            return val
+        }
+        
+        // 2. Reflection Hack (Mirror)
+        let mirror = Mirror(reflecting: view)
+        for child in mirror.children {
+            if child.label == "text" || child.label == "_text" {
+                return "\(child.value)"
+            }
+        }
+        
+        // 3. Subview Class Drill (SwiftUI rendering uses specific internal classes)
+        let className = String(describing: type(of: view))
+        if className.contains("DrawingView") || className.contains("TextView") {
+            // Recurse into sublayers or descriptions if needed, 
+            // but for now Mirror/Accessibility covers 90%.
+        }
+        
+        return nil
+    }
+
     // MARK: - Helpers
 
     private func sanitize(_ text: String) -> String {
@@ -230,11 +264,18 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 // MARK: - Visual Helpers
 
 extension UIImage {
-    func sankofa_toBase64() -> String {
-        let newSize = CGSize(width: size.width * 0.5, height: size.height * 0.5)
+    func sankofa_toBase64(tintColor: UIColor? = nil) -> String {
+        // PostHog Image Hack: Scale down and TINT for SF Symbols
+        let newSize = CGSize(width: size.width * 0.7, height: size.height * 0.7)
         let renderer = UIGraphicsImageRenderer(size: newSize)
-        let scaledImage = renderer.image { _ in
-            self.draw(in: CGRect(origin: .zero, size: newSize))
+        let scaledImage = renderer.image { context in
+            if let tint = tintColor {
+                tint.setFill()
+                context.fill(CGRect(origin: .zero, size: newSize))
+                self.draw(in: CGRect(origin: .zero, size: newSize), blendMode: .destinationIn, alpha: 1.0)
+            } else {
+                self.draw(in: CGRect(origin: .zero, size: newSize))
+            }
         }
         return scaledImage.pngData()?.base64EncodedString() ?? ""
     }
