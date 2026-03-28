@@ -25,15 +25,47 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             return
         }
 
-        // 1. Build the High-Fidelity DOM Tree
-        nodeIdCounter = 4 // Reserve 1=Doc, 2=HTML, 3=Body
-        let domTree = crawlForRRWeb(view: window, window: window, depth: 0)
+        // 1. Reset ID counter to 5 (We reserve 1-4 for the Document Root)
+        nodeIdCounter = 5
         
-        // 2. Offload JSON encoding to background thread
+        // 2. Crawl the iOS UI to get your styled UIWindow <div>
+        let windowNode = crawlForRRWeb(view: window, window: window, depth: 0)
+        
+        // 3. THE FIX: Wrap it in a strict rrweb HTML Document skeleton
+        let documentNode = RRWebNode(
+            id: 1, type: 0, tagName: nil, attributes: nil, // Type 0 = Document Root
+            childNodes: [
+                RRWebNode(
+                    id: 2, type: 2, tagName: "html", attributes: [:],
+                    childNodes: [
+                        RRWebNode(id: 3, type: 2, tagName: "head", attributes: [:], childNodes: []),
+                        RRWebNode(
+                            id: 4, type: 2, tagName: "body", 
+                            // Force the body to match the iPhone's exact screen dimensions so it doesn't collapse
+                            attributes: ["style": "margin: 0; padding: 0; width: \(window.bounds.width)px; height: \(window.bounds.height)px; background-color: #000000;"],
+                            childNodes: [windowNode],
+                            textContent: nil
+                        )
+                    ],
+                    textContent: nil
+                )
+            ],
+            textContent: nil
+        )
+        
+        // 4. THE ENVELOPE: Package it as a FullSnapshot Event (Type 2)
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+        let rrwebEvent = RRWebEvent(
+            type: 2,
+            data: RRWebSnapshotData(node: documentNode, initialOffset: ["left": 0, "top": 0]),
+            timestamp: timestamp
+        )
+        
+        // 5. Encode and ship to SQLite
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             do {
-                let jsonData = try JSONEncoder().encode(domTree)
+                let jsonData = try JSONEncoder().encode(rrwebEvent)
                 let frame = SankofaFrame(
                     sessionId: self.sessionId,
                     timestamp: Date(),

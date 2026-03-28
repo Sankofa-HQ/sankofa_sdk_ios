@@ -51,23 +51,13 @@ final class SankofaReplayUploader {
                 }
                 
             case .wireframe(let data):
-                // Phase 28: High-Fidelity Wireframe
-                // 1. Decode the node tree (iosRoot)
-                guard let iosRoot = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                // Phase 28: High-Fidelity Wireframe (Pre-Packaged)
+                guard let snapshotEvent = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                     self.logger.warn("❌ Failed to decode wireframe data")
                     return
                 }
                 
-                // 2. Wrap in rrweb Document structure (id 1=Doc, 2=HTML, 3=Body)
-                let rootNode: [String: Any] = [
-                    "id": 1, "type": 0, "childNodes": [[
-                        "id": 2, "type": 2, "tagName": "html", "attributes": ["lang": "en", "style": "width: 100%; height: 100%; margin: 0; padding: 0; "], "childNodes": [[
-                            "id": 3, "type": 2, "tagName": "body", "attributes": ["style": "margin: 0; padding: 0; background: #000; width: 100%; height: 100%; overflow: hidden; "], "childNodes": [iosRoot]
-                        ]]
-                    ]]
-                ]
-                
-                // 3. Build Meta (4) & FullSnapshot (2) events
+                // Meta Event (Type 4) is still required so the player knows the viewport bounds
                 let metaEvent: [String: Any] = [
                     "type": 4,
                     "timestamp": timestampMs,
@@ -78,16 +68,8 @@ final class SankofaReplayUploader {
                     ]
                 ]
                 
-                let snapshotEvent: [String: Any] = [
-                    "type": 2,
-                    "timestamp": timestampMs + 1,
-                    "data": [
-                        "node": rootNode,
-                        "initialOffset": ["left": 0, "top": 0]
-                    ]
-                ]
-                
                 chunkEvents = [metaEvent, snapshotEvent]
+
             }
 
             var envelope: [String: Any] = [

@@ -19,6 +19,17 @@ struct RRWebNode: Codable {
     let textContent: String?
 }
 
+struct RRWebEvent: Codable {
+    let type: Int // 2 = FullSnapshot
+    let data: RRWebSnapshotData
+    let timestamp: Int64
+}
+
+struct RRWebSnapshotData: Codable {
+    let node: RRWebNode
+    let initialOffset: [String: Double]
+}
+
 /// A captured frame ready for upload.
 struct SankofaFrame {
     enum Payload {
