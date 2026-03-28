@@ -70,17 +70,17 @@ final class SankofaQueueManager {
     // MARK: - Public
 
     /// Enqueue an event payload dictionary.
-    func enqueue(_ event: [String: Any]) {
+    func enqueue(_ event: [String: Any], type: String? = nil) {
         guard let data = try? JSONSerialization.data(withJSONObject: event) else {
             logger.warn("❌ Could not serialise event")
             return
         }
-        let type = event["type"] as? String ?? "track"
-        var record = QueuedEvent(id: nil, type: type, payload: data, createdAt: Date())
+        let eventType = type ?? (event["type"] as? String ?? "track")
+        var record = QueuedEvent(id: nil, type: eventType, payload: data, createdAt: Date())
         do {
             // Sync write is fine here as it's a simple record insertion.
             try db.write { db in try record.insert(db) }
-            logger.log("📥 Queued '\(type)' (total: \(count()))")
+            logger.log("📥 Queued '\(eventType)' (total: \(count()))")
         } catch {
             logger.warn("❌ Failed to enqueue: \(error)")
         }
