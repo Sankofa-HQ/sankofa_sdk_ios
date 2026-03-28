@@ -77,20 +77,47 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             ]
         ]
 
-        let frame = SankofaFrame(
-            sessionId: sessionId,
-            timestamp: Date(),
-            payload: .rrwebEvent(snapshotEvent), // Sending snapshot primarily, Meta could be a separate event
-            secondaryPayloads: [.rrwebEvent(metaEvent)] // We'll need to update SankofaFrame or just send in array
-        )
+        // --- 2. Full Snapshot (Type 2) ---
+        nodeIdCounter = 4 // Reserve 1=Doc, 2=HTML, 3=Body
+        let iosRoot = self.crawlForRRWeb(view: window, window: window)
         
-        // SIMPLIFICATION: Send BOTH events in the same chunk's 'events' array
+        let rootNode: [String: Any] = [
+            "id": 1,
+            "type": 0, // Document
+            "childNodes": [
+                [
+                    "id": 2,
+                    "type": 2, // Element
+                    "tagName": "html",
+                    "attributes": ["lang": "en"],
+                    "childNodes": [
+                        [
+                            "id": 3,
+                            "type": 2, // Element
+                            "tagName": "body",
+                            "attributes": ["style": "margin: 0; padding: 0; background: #000; "],
+                            "childNodes": [iosRoot]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        
+        let snapshotEvent: [String: Any] = [
+            "type": 2,
+            "timestamp": timestampMs + 1,
+            "data": [
+                "node": rootNode,
+                "initialOffset": ["left": 0, "top": 0]
+            ]
+        ]
+
+        // --- 3. Pack Both Events (Meta + Snapshot) ---
         let chunkEvents = [metaEvent, snapshotEvent]
-        
         let unifiedFrame = SankofaFrame(
             sessionId: sessionId,
             timestamp: Date(),
-            payload: .rrwebEvent(["events": chunkEvents]) // ReplayUploader will unpack this
+            payload: SankofaFrame.Payload.rrwebEvent(["events": chunkEvents])
         )
         
         completion(unifiedFrame)
