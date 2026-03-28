@@ -1,14 +1,15 @@
 import UIKit
 
-/// Wireframe capture engine.
+/// High-Fidelity rrweb Replay Engine (Phase 25 — The CSS Bridge).
 ///
-/// Recursively traverses the live `UIView` hierarchy and collects it as a
-/// **pre-flattened** array of node dictionaries ready for JSON encoding.
-/// No intermediate JSON serialization step — nodes are built directly.
+/// This engine acts as a real-time iOS-to-CSS compiler. It recursively traverses 
+/// the live UIView hierarchy and transforms every view, label, and button into 
+/// an rrweb-compliant HTML node with pixel-perfect inline CSS.
 final class SankofaWireframeEngine: SankofaCaptureEngine {
 
     private let sessionId: String
     private var nodeIdCounter = 1
+    private let maskAllInputs: Bool = true // Standard for enterprise recording
 
     init(sessionId: String) {
         self.sessionId = sessionId
@@ -49,7 +50,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         completion(frame)
     }
 
-    // MARK: - rrweb Crawler
+    // MARK: - rrweb Crawler (High-Fidelity CSS Bridge)
 
     @MainActor
     private func crawlForRRWeb(view: UIView, window: UIWindow) -> [String: Any] {
@@ -59,41 +60,90 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         let frame = view.convert(view.bounds, to: window)
         var children: [[String: Any]] = []
         
-        // 🎨 CSS STYLING: Convert iOS properties to inline CSS for rrweb player
-        let bgColor = view.backgroundColor?.sankofa_toHexString() ?? "transparent"
-        var style = "position: absolute; left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; width: \(Int(frame.width))px; height: \(Int(frame.height))px; background-color: \(bgColor);"
+        // 🎨 1. CORE CSS (Positioning, Sizing, Borders, Backgrounds)
+        var css = "position: absolute; "
+        css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
+        css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
+        css += "box-sizing: border-box; overflow: hidden; "
+        
+        if let bgColor = view.backgroundColor?.sankofa_toHexString(), bgColor != "transparent" {
+            css += "background-color: \(bgColor); "
+        }
+        
+        if view.layer.cornerRadius > 0 {
+            css += "border-radius: \(Int(view.layer.cornerRadius))px; "
+        }
+        
+        if view.layer.borderWidth > 0 {
+            let borderColor = view.layer.borderColor?.sankofa_toHexString() ?? "#000000"
+            css += "border: \(Int(view.layer.borderWidth))px solid \(borderColor); "
+        }
         
         if view.alpha < 0.99 {
-            style += " opacity: \(view.alpha);"
+            css += "opacity: \(String(format: "%.2f", view.alpha)); "
         }
 
         var tagName = "div"
         var textContent: String? = nil
+        var attributes: [String: String] = [:]
         
-        // 🧩 TAG MAPPING: iOS UI -> Standard HTML
+        // 🎨 2. ELEMENT MAPPING (Typography & Components)
         if let label = view as? UILabel {
-            tagName = "p"
+            // Use 'div' for labels to keep layout strict
+            tagName = "div" 
             textContent = label.text
+            
+            let fontSize = Int(label.font.pointSize)
             let textColor = label.textColor.sankofa_toHexString()
-            style += " color: \(textColor); font-size: \(Int(label.font.pointSize))px; font-family: sans-serif; overflow: hidden;"
+            
+            var align = "left"
+            var justify = "flex-start"
+            if label.textAlignment == .center { 
+                align = "center" 
+                justify = "center"
+            } else if label.textAlignment == .right { 
+                align = "right"
+                justify = "flex-end"
+            }
+            
+            // Flexbox flawlessly mimics iOS vertical text centering
+            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; text-align: \(align); display: flex; align-items: center; justify-content: \(justify); white-space: pre-wrap; "
+            
         } else if let button = view as? UIButton {
             tagName = "button"
             textContent = button.currentTitle
-            style += " border: none; text-align: center;"
-        } else if view is UITextField || view is UITextView {
+            let fontSize = Int(button.titleLabel?.font.pointSize ?? 16)
+            let textColor = button.titleLabel?.textColor.sankofa_toHexString() ?? "#007AFF"
+            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; border: none; outline: none; background-color: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; "
+            
+        } else if let textField = view as? UITextField {
             tagName = "input"
-            textContent = "[masked]"
-            style += " border: 1px solid #ccc;"
+            let placeholder = textField.placeholder ?? ""
+            let fontSize = Int(textField.font?.pointSize ?? 14)
+            let textColor = textField.textColor?.sankofa_toHexString() ?? "#000000"
+            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; padding: 0 8px; border: 1px solid #ccc; outline: none; "
+            
+            if textField.isSecureTextEntry || maskAllInputs {
+                attributes["type"] = "password"
+                attributes["value"] = "••••••••"
+            } else {
+                attributes["value"] = textField.text ?? placeholder
+            }
+        } else if view is UIImageView {
+            // Render images as subtle placeholder blocks to preserve privacy and bandwidth
+            tagName = "div"
+            css += "background-color: #E5E5EA; border: 1px solid #D1D1D6; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #8E8E93; font-family: sans-serif; "
+            textContent = "Image Cap"
         }
         
-        // 🚜 RECURSION: Crawl subviews (PostHog optimization: skip hidden/transparent)
+        // 🚜 3. RECURSION (Depth-First Traversal)
         for subview in view.subviews {
             if !subview.isHidden && subview.alpha > 0.01 {
                 children.append(crawlForRRWeb(view: subview, window: window))
             }
         }
         
-        // 📝 TEXT NODES: rrweb expects text as a separate child node (type: 3)
+        // 📝 4. TEXT NODES (rrweb requirement)
         if let text = textContent, !text.isEmpty {
             let tNodeId = nodeIdCounter
             nodeIdCounter += 1
@@ -104,11 +154,13 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             ])
         }
         
+        attributes["style"] = css
+        
         var node: [String: Any] = [
             "id": currentId,
             "type": 2, // ElementNode
             "tagName": tagName,
-            "attributes": ["style": style]
+            "attributes": attributes
         ]
         
         if !children.isEmpty {
@@ -121,7 +173,6 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
     // MARK: - Helpers
 
     private func sanitize(_ text: String) -> String {
-        // Basic sanitisation to prevent JSON breaking
         var result = ""
         for scalar in text.unicodeScalars {
             switch scalar.value {
@@ -137,15 +188,14 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 
 // MARK: - Visual Helpers
 
-extension UIColor {
+extension CGColor {
     func sankofa_toHexString() -> String {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        if self.getRed(&r, green: &g, blue: &b, alpha: &a) {
-            return String(format: "#%02X%02X%02X", 
-                          Int(r * 255), 
-                          Int(g * 255), 
-                          Int(b * 255))
+        if let components = components, components.count >= 3 {
+            let r = Float(components[0])
+            let g = Float(components[1])
+            let b = Float(components[2])
+            return String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255))
         }
-        return "#FFFFFF"
+        return "#000000"
     }
 }
