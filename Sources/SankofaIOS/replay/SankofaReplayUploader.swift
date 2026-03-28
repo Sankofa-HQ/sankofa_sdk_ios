@@ -67,22 +67,46 @@ final class SankofaReplayUploader {
             case .wireframe(let data):
                 replayMode = "wireframe"
                 let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+
+                // ─── Flatten recursive view tree into a flat nodes array ───────────────────
+                // The dashboard's WireframeNode is flat: { t, v, x, y, w, h }.
+                // We must NOT send the recursive child tree — flatten with a BFS/DFS pass.
+                var flatNodes: [[String: Any]] = []
+                func flattenNode(_ node: [String: Any]) {
+                    var flat: [String: Any] = [:]
+                    if let t = node["t"] { flat["t"] = t }
+                    if let v = node["v"] { flat["v"] = v }
+                    if let x = node["x"] { flat["x"] = x }
+                    if let y = node["y"] { flat["y"] = y }
+                    if let w = node["w"] { flat["w"] = w }
+                    if let h = node["h"] { flat["h"] = h }
+                    if let hidden = node["hidden"] as? Bool, !hidden { } // skip hidden
+                    flatNodes.append(flat)
+                    if let children = node["c"] as? [[String: Any]] {
+                        children.forEach { flattenNode($0) }
+                    }
+                }
+                flattenNode(json)
+
+                // Build the wireframe event
+                var wireframeEvent: [String: Any] = [
+                    "type": "ui_snapshot",
+                    "time_offset_ms": 0,
+                    "nodes": flatNodes
+                ]
+                // If there's an active interaction, embed its coords inside the event
+                if let interact = latestInteraction {
+                    wireframeEvent["x"] = interact.x
+                    wireframeEvent["y"] = interact.y
+                }
+
+                let chunkStartMs = Int64(frame.timestamp.timeIntervalSince1970 * 1000)
                 envelope = [
                     "mode": "wireframe",
-                    "events": [[
-                        "type": latestInteraction?.type ?? "ui_snapshot",
-                        "time_offset_ms": 0,
-                        "nodes": [json]
-                    ]]
+                    "chunk_start_timestamp": chunkStartMs,
+                    "events": [wireframeEvent]
                 ]
-                
-                // Add interaction coords at top level for Wireframe playback
-                if let interact = latestInteraction {
-                    envelope["x"] = interact.x
-                    envelope["y"] = interact.y
-                    envelope["eventType"] = interact.type
-                }
-                
+
             case .screenshot(let data):
                 replayMode = "screenshot"
                 envelope = [
