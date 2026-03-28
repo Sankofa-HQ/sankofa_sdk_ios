@@ -4,6 +4,7 @@ import UIKit
 ///
 /// The coordinator runs a `CADisplayLink` throttled to a configurable FPS. On
 /// each tick, it delegates to the replay engine to capture an rrweb snapshot.
+@MainActor
 final class SankofaCaptureCoordinator {
 
     // MARK: - Config
