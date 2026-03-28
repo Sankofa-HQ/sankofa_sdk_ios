@@ -61,6 +61,7 @@ final class SankofaCaptureCoordinator {
 
     // MARK: - Capture Tick
 
+    @MainActor
     @objc internal func tick() {
         frameCounter += 1
         guard frameCounter > skipFrames else { return }

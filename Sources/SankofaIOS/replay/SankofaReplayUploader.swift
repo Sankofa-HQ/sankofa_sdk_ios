@@ -38,7 +38,7 @@ final class SankofaReplayUploader {
             guard case .rrwebEvent(let event) = frame.payload else { return }
             
             let chunkStartMs = Int64(frame.timestamp.timeIntervalSince1970 * 1000)
-            let envelope: [String: Any] = [
+            var envelope: [String: Any] = [
                 "mode": "rrweb",
                 "chunk_start_timestamp": chunkStartMs,
                 "events": [event]
