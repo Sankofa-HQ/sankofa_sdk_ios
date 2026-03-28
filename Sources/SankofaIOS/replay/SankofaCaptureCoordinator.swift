@@ -8,7 +8,9 @@ import UIKit
 /// (Phase 3 — Escalation System).
 final class SankofaCaptureCoordinator {
 
-    // MARK: - Config    private let initialMode: SankofaCaptureMode
+    // MARK: - Config
+
+    private let initialMode: SankofaCaptureMode
     private let maskAllInputs: Bool
     let uploader: SankofaReplayUploader
     private var sessionId: String = ""
