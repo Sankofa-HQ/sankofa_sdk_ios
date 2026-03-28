@@ -84,7 +84,7 @@ public final class Sankofa: NSObject {
             mode: config.captureMode,
             maskAllInputs: config.maskAllInputs,
             uploader: SankofaReplayUploader(
-                queueManager: queueManager,
+                queueManager: qm,
                 logger: logger
             )
         )
