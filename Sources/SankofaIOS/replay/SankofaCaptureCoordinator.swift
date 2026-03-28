@@ -8,9 +8,7 @@ import UIKit
 /// (Phase 3 — Escalation System).
 final class SankofaCaptureCoordinator {
 
-    // MARK: - Config
-
-    private let initialMode: SankofaCaptureMode
+    // MARK: - Config    private let initialMode: SankofaCaptureMode
     private let maskAllInputs: Bool
     let uploader: SankofaReplayUploader
     private var sessionId: String = ""
@@ -30,7 +28,11 @@ final class SankofaCaptureCoordinator {
 
     private var displayLink: CADisplayLink?
     private var frameCounter: Int = 0
-    private var skipFrames: Int = 0 // Derived from FPS: skip (60/targetFPS - 1) frames
+    private var skipFrames: Int = 0
+    
+    // 🎯 SNIPER: CFRunLoopObserver for idle-state screenshot capture
+    private var runLoopObserver: CFRunLoopObserver?
+    private var lastCaptureTime: TimeInterval = 0
 
     // MARK: - Escalation
 
@@ -43,10 +45,7 @@ final class SankofaCaptureCoordinator {
         self.initialMode = mode
         self.maskAllInputs = maskAllInputs
         self.uploader = uploader
-        // Default engine based on config
-        self.currentEngine = mode == .wireframe
-            ? SankofaWireframeEngine(sessionId: "")   // Replaced in start()
-            : SankofaScreenshotEngine(sessionId: "", maskAllInputs: maskAllInputs)
+        self.currentEngine = SankofaWireframeEngine(sessionId: "") // Placeholder
     }
 
     // MARK: - Lifecycle
@@ -56,34 +55,30 @@ final class SankofaCaptureCoordinator {
         wireframeEngine = SankofaWireframeEngine(sessionId: self.sessionId)
         screenshotEngine = SankofaScreenshotEngine(sessionId: self.sessionId, maskAllInputs: maskAllInputs)
         
-        // Select initial engine based on configuration
         currentEngine = (initialMode == .wireframe) ? wireframeEngine : screenshotEngine
-
         skipFrames = max(0, Int(60.0 / targetFPS) - 1)
         
-        // Attach touch interceptor to the key window
         if let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) {
             let interceptor = SankofaTouchInterceptor(target: nil, action: nil)
             window.addGestureRecognizer(interceptor)
             self.touchInterceptor = interceptor
         }
 
-        // 🚨 Retain Cycle Fix: CADisplayLink strongly retains its target. 
-        // We use a WeakProxy to ensure the Coordinator can be deinitialized.
         let proxy = WeakProxy(self)
         let link = CADisplayLink(target: proxy, selector: #selector(WeakProxy.onTick))
         link.add(to: .main, forMode: .common)
-        if #available(iOS 15.0, *) {
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 1, maximum: 30)
-        } else {
-            link.preferredFramesPerSecond = Int(targetFPS)
-        }
         displayLink = link
+        
+        // If starting in screenshot mode, use the Sniper
+        if currentEngine is SankofaScreenshotEngine {
+            startIdleCapture()
+        }
     }
 
     func stop() {
         displayLink?.invalidate()
         displayLink = nil
+        stopIdleCapture()
         escalationTimer?.invalidate()
         escalationTimer = nil
     }
@@ -91,48 +86,80 @@ final class SankofaCaptureCoordinator {
     // MARK: - Capture Tick
 
     @objc internal func tick() {
+        // 💨 PERFORMANCE: If we are in screenshot mode, the Sniper (RunLoopObserver) 
+        // handles the capture. We don't want the CADisplayLink to fire as well.
+        guard !(currentEngine is SankofaScreenshotEngine) else { return }
+
         frameCounter += 1
         guard frameCounter > skipFrames else { return }
         frameCounter = 0
 
-        // Flush interactions collected since last tick
         let interactions = touchInterceptor?.flush() ?? []
         let context = deviceInfo.deviceContext()
 
-        // THE FIX: Dispatch asynchronously to the main queue.
-        // This forces the screenshot engine to wait until all pending UI animations 
-        // (like button ripples and touch events) have finished rendering!
-        DispatchQueue.main.async { [weak self] in
-            self?.currentEngine.captureFrame { frame in
-                guard let self = self, let frame = frame else { return }
-                self.uploader.upload(frame, deviceContext: context, interactions: interactions)
-            }
+        self.currentEngine.captureFrame { [weak self] frame in
+            guard let self = self, let frame = frame else { return }
+            self.uploader.upload(frame, deviceContext: context, interactions: interactions)
         }
     }
+
+    // MARK: - Idle Sniper (PostHog Method)
+
+    private func startIdleCapture() {
+        stopIdleCapture()
+        
+        // 🎯 SNIPER: We observe the RunLoop activity "BeforeWaiting".
+        // This means the UI thread has just finished drawing all animations, 
+        // ripples, and layout passes. Snapping the screen NOW will not lag the UI!
+        let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { [weak self] _, _ in
+            guard let self = self else { return }
+            
+            let now = CACurrentMediaTime()
+            // Throttle to target FPS (e.g., once every 0.5s for 2 FPS)
+            if (now - self.lastCaptureTime) >= (1.0 / self.targetFPS) {
+                self.lastCaptureTime = now
+                
+                let interactions = self.touchInterceptor?.flush() ?? []
+                let context = self.deviceInfo.deviceContext()
+                
+                self.currentEngine.captureFrame { frame in
+                    guard let frame = frame else { return }
+                    self.uploader.upload(frame, deviceContext: context, interactions: interactions)
+                }
+            }
+        }
+        
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        self.runLoopObserver = observer
+    }
+
+    private func stopIdleCapture() {
+        if let observer = runLoopObserver {
+            CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
+            runLoopObserver = nil
+        }
+    }
+
     // MARK: - Escalation (Phase 3)
 
-    /// Configure the trigger map from remote config.
     func configure(escalation: EscalationConfig) {
         self.escalationConfig = escalation
     }
 
-    /// Called on every `Sankofa.shared.track(event)`.
-    /// Checks if the event is in the trigger list and escalates if so.
     func onEvent(_ event: String) {
         guard let config = escalationConfig,
               config.triggers.contains(event),
               !(currentEngine is SankofaScreenshotEngine) else { return }
 
-        // Swap to screenshot engine
+        // Swap to high-fidelity engine
         currentEngine = screenshotEngine
+        startIdleCapture()
 
-        // Schedule automatic rollback
         escalationTimer?.invalidate()
-        escalationTimer = Timer.scheduledTimer(
-            withTimeInterval: config.highFidelityDuration,
-            repeats: false
-        ) { [weak self] _ in
-            self?.currentEngine = self?.wireframeEngine ?? self!.currentEngine
+        escalationTimer = Timer.scheduledTimer(withTimeInterval: config.highFidelityDuration, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.stopIdleCapture()
+            self.currentEngine = self.wireframeEngine
         }
     }
 }

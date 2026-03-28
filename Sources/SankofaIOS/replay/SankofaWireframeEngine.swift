@@ -39,10 +39,9 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 
     /// Recursively collects view nodes into a pre-allocated flat array (DFS order).
     private func collectNodes(from view: UIView, in window: UIWindow, into output: inout [[String: Any]]) {
-        // 🏗️ WINDOW-SPACE COORDINATES: 
-        // We convert the view's local bounds to window-space so the positions 
-        // are absolute. This is crucial for a flat renderer that doesn't 
-        // maintain the original subview hierarchy.
+        // 💨 PERFORMANCE & FIDELITY: Skip hidden/fully-transparent views (PostHog optimization)
+        guard !view.isHidden && view.alpha > 0.01 else { return }
+
         let f = view.convert(view.bounds, to: window)
         
         var node: [String: Any] = [
@@ -53,7 +52,16 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             "h": self.safeDouble(f.size.height)
         ]
 
-        // Capture text content — only from safe view types
+        // 🎨 VISUALS: Extract background color as hex for web reconstruction
+        if let bgColor = view.backgroundColor {
+            node["bg"] = bgColor.sankofa_toHexString()
+        }
+        
+        if view.alpha < 0.99 {
+            node["a"] = self.safeDouble(view.alpha)
+        }
+
+        // 📝 TEXT: Only from safe, non-sensitive view types
         if let label = view as? UILabel {
             node["v"] = self.sanitize(label.text)
         } else if let button = view as? UIButton {
@@ -64,56 +72,59 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 
         output.append(node)
 
-        // Recurse into visible, non-transparent subviews
-        for sub in view.subviews where !sub.isHidden && sub.alpha > 0.01 {
+        // Recurse into subviews
+        for sub in view.subviews {
             self.collectNodes(from: sub, in: window, into: &output)
         }
     }
 
     // MARK: - Helpers
 
-    /// Converts CGFloat to Double, clamping NaN and Infinity to 0.
+    private func typeName(of view: UIView) -> String {
+        switch view {
+        case is UILabel:          return "text"
+        case is UIButton:         return "button"
+        case is UITextField:      return "input"
+        case is UITextView:       return "input"
+        case is UIImageView:      return "media"
+        case is UISwitch:         return "toggle"
+        case is UISlider:         return "slider"
+        case is UITableView:      return "list"
+        case is UICollectionView: return "grid"
+        default:                  return "view"
+        }
+    }
+
     private func safeDouble(_ value: CGFloat) -> Double {
         let d = Double(value)
         return d.isFinite ? d : 0.0
     }
 
-    /// Removes JSON-breaking characters from text:
-    /// - C0 control chars (U+0000–U+001F) except safe whitespace (\t \n \r)
-    /// - U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR
-    ///   (treated as newlines by JS's JSON.parse, breaking string literals)
     private func sanitize(_ text: String?) -> String {
         guard let text = text, !text.isEmpty else { return "" }
         var result = ""
         result.reserveCapacity(text.unicodeScalars.count)
         for scalar in text.unicodeScalars {
             switch scalar.value {
-            case 0x00:          continue  // null byte
-            case 0x01...0x08:   continue  // C0 controls
-            case 0x0B...0x0C:   continue  // vertical tab, form feed
-            case 0x0E...0x1F:   continue  // remaining C0 controls
-            case 0x7F:          continue  // DEL
-            case 0x80...0x9F:   continue  // C1 controls
-            case 0x2028, 0x2029: continue // JS line/paragraph separators
+            case 0x00, 0x01...0x08, 0x0B...0x0C, 0x0E...0x1F, 0x7F, 0x80...0x9F, 0x2028, 0x2029:
+                continue
             default:
                 result.unicodeScalars.append(scalar)
             }
         }
         return result
     }
+}
 
-    private func typeName(of view: UIView) -> String {
-        switch view {
-        case is UILabel:          return "text"
-        case is UIButton:         return "button"
-        case is UITextField:      return "text" // Map to text for now
-        case is UITextView:       return "text" // Map to text for now
-        case is UIImageView:      return "media"
-        case is UISwitch:         return "button"
-        case is UISlider:         return "media"
-        case is UITableView:      return "View" // Generic base
-        case is UICollectionView: return "View" // Generic base
-        default:                  return "View"
-        }
+// MARK: - Visual Helpers
+
+extension UIColor {
+    func sankofa_toHexString() -> String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        self.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return String(format: "#%02X%02X%02X", 
+                      Int(r * 255), 
+                      Int(g * 255), 
+                      Int(b * 255))
     }
 }
