@@ -42,6 +42,14 @@ final class SankofaReplayUploader {
             
             let dateStr = self.isoFormatter.string(from: frame.timestamp)
             
+            // 🎯 SUPPORT MULTI-EVENT PAYLOADS: If the engine sent a batch of events, unpack them.
+            let chunkEvents: [[String: Any]]
+            if let nestedEvents = event["events"] as? [[String: Any]] {
+                chunkEvents = nestedEvents
+            } else {
+                chunkEvents = [event]
+            }
+
             var envelope: [String: Any] = [
                 "mode": "rrweb",
                 "session_id": frame.sessionId,
@@ -49,9 +57,9 @@ final class SankofaReplayUploader {
                 "chunk_index": currentChunk,
                 "replay_mode": "rrweb",
                 "started_at": dateStr,
-                "ended_at": dateStr, // Single frame, so start == end
-                "event_count": 1,
-                "events": [event]
+                "ended_at": dateStr,
+                "event_count": chunkEvents.count,
+                "events": chunkEvents
             ]
 
             // Standard mobile metadata

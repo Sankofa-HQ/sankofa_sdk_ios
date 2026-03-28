@@ -25,17 +25,52 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             return
         }
 
-        // 🎯 THE CHEAT CODE: Reset counter for every full snapshot
         nodeIdCounter = 1
-        
-        // 1. Crawl the view tree into a virtual DOM (rrweb style)
-        let rootNode = self.crawlForRRWeb(view: window, window: window)
-        
-        // 2. Package into an rrweb "Full Snapshot" event (type: 2)
         let timestampMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let event: [String: Any] = [
-            "type": 2, // FullSnapshot
+        let frameSize = window.bounds.size
+        
+        // --- 1. Meta Event (Type 4) ---
+        // Tells the player the viewport dimensions so it can scale to "phone size"
+        let metaEvent: [String: Any] = [
+            "type": 4,
             "timestamp": timestampMs,
+            "data": [
+                "href": "ios-app://\(Bundle.main.bundleIdentifier ?? "sankofa")",
+                "width": Int(frameSize.width),
+                "height": Int(frameSize.height)
+            ]
+        ]
+
+        nodeIdCounter = 4 // Reserve 1=Doc, 2=HTML, 3=Body
+        let iosRoot = self.crawlForRRWeb(view: window, window: window)
+        
+        let rootNode: [String: Any] = [
+            "id": 1,
+            "type": 0, // Document
+            "childNodes": [
+                [
+                    "id": 2,
+                    "type": 2, // Element
+                    "tagName": "html",
+                    "attributes": ["lang": "en"],
+                    "childNodes": [
+                        [
+                            "id": 3,
+                            "type": 2, // Element
+                            "tagName": "body",
+                            "attributes": ["style": "margin: 0; padding: 0; background: #000; "],
+                            "childNodes": [iosRoot]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        
+        // nodeIdCounter is now > 4 from the crawl
+        
+        let snapshotEvent: [String: Any] = [
+            "type": 2,
+            "timestamp": timestampMs + 1,
             "data": [
                 "node": rootNode,
                 "initialOffset": ["left": 0, "top": 0]
@@ -45,9 +80,20 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         let frame = SankofaFrame(
             sessionId: sessionId,
             timestamp: Date(),
-            payload: .rrwebEvent(event)
+            payload: .rrwebEvent(snapshotEvent), // Sending snapshot primarily, Meta could be a separate event
+            secondaryPayloads: [.rrwebEvent(metaEvent)] // We'll need to update SankofaFrame or just send in array
         )
-        completion(frame)
+        
+        // SIMPLIFICATION: Send BOTH events in the same chunk's 'events' array
+        let chunkEvents = [metaEvent, snapshotEvent]
+        
+        let unifiedFrame = SankofaFrame(
+            sessionId: sessionId,
+            timestamp: Date(),
+            payload: .rrwebEvent(["events": chunkEvents]) // ReplayUploader will unpack this
+        )
+        
+        completion(unifiedFrame)
     }
 
     // MARK: - rrweb Crawler (High-Fidelity CSS Bridge)
@@ -60,7 +106,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         let frame = view.convert(view.bounds, to: window)
         var children: [[String: Any]] = []
         
-        // 🎨 1. CORE CSS (Positioning, Sizing, Borders, Backgrounds)
+        // ... (CSS generation logic unchanged) ...
         var css = "position: absolute; "
         css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
         css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
@@ -87,87 +133,64 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         var textContent: String? = nil
         var attributes: [String: String] = [:]
         
-        // 🎨 2. ELEMENT MAPPING (Typography & Components)
+        // Typography & Component Mapping
         if let label = view as? UILabel {
-            // Use 'div' for labels to keep layout strict
             tagName = "div" 
             textContent = label.text
-            
             let fontSize = Int(label.font.pointSize)
             let textColor = label.textColor.sankofa_toHexString()
-            
             var align = "left"
             var justify = "flex-start"
-            if label.textAlignment == .center { 
-                align = "center" 
-                justify = "center"
-            } else if label.textAlignment == .right { 
-                align = "right"
-                justify = "flex-end"
-            }
-            
-            // Flexbox flawlessly mimics iOS vertical text centering
+            if label.textAlignment == .center { align = "center"; justify = "center" }
+            else if label.textAlignment == .right { align = "right"; justify = "flex-end" }
             css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; text-align: \(align); display: flex; align-items: center; justify-content: \(justify); white-space: pre-wrap; "
-            
         } else if let button = view as? UIButton {
             tagName = "button"
             textContent = button.currentTitle
             let fontSize = Int(button.titleLabel?.font.pointSize ?? 16)
             let textColor = button.titleLabel?.textColor?.sankofa_toHexString() ?? "#007AFF"
             css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; border: none; outline: none; background-color: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; "
-            
         } else if let textField = view as? UITextField {
             tagName = "input"
-            let placeholder = textField.placeholder ?? ""
             let fontSize = Int(textField.font?.pointSize ?? 14)
             let textColor = textField.textColor?.sankofa_toHexString() ?? "#000000"
             css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; padding: 0 8px; border: 1px solid #ccc; outline: none; "
-            
             if textField.isSecureTextEntry || maskAllInputs {
-                attributes["type"] = "password"
-                attributes["value"] = "••••••••"
+                attributes["type"] = "password"; attributes["value"] = "••••••••"
             } else {
-                attributes["value"] = textField.text ?? placeholder
+                attributes["value"] = textField.text ?? textField.placeholder ?? ""
             }
         } else if view is UIImageView {
-            // Render images as subtle placeholder blocks to preserve privacy and bandwidth
             tagName = "div"
             css += "background-color: #E5E5EA; border: 1px solid #D1D1D6; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #8E8E93; font-family: sans-serif; "
             textContent = "Image Cap"
         }
         
-        // 🚜 3. RECURSION (Depth-First Traversal)
         for subview in view.subviews {
             if !subview.isHidden && subview.alpha > 0.01 {
                 children.append(crawlForRRWeb(view: subview, window: window))
             }
         }
         
-        // 📝 4. TEXT NODES (rrweb requirement)
         if let text = textContent, !text.isEmpty {
             let tNodeId = nodeIdCounter
             nodeIdCounter += 1
             children.append([
                 "id": tNodeId,
-                "type": 3, // TextNode
+                "type": 3,
                 "textContent": self.sanitize(text)
             ])
         }
         
         attributes["style"] = css
         
-        var node: [String: Any] = [
+        return [
             "id": currentId,
-            "type": 2, // ElementNode
+            "type": 2,
             "tagName": tagName,
-            "attributes": attributes
+            "attributes": attributes,
+            "childNodes": children // ALWAYS INCLUDE as per rrweb-snapshot requirement
         ]
-        
-        if !children.isEmpty {
-            node["childNodes"] = children
-        }
-        
-        return node
     }
 
     // MARK: - Helpers
