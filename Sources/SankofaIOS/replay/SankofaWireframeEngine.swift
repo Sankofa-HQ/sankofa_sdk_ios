@@ -22,7 +22,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         // 🚨 MAIN THREAD SAFETY: Read the entire view hierarchy synchronously
         // on the main thread, producing a pre-flattened node array.
         var flatNodes: [[String: Any]] = []
-        collectNodes(from: window, into: &flatNodes)
+        self.collectNodes(from: window, in: window, into: &flatNodes)
 
         // Payload: pass the flat nodes array directly — no JSON roundtrip needed.
         let frame = SankofaFrame(
@@ -36,8 +36,13 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
     // MARK: - Flat Node Collection
 
     /// Recursively collects view nodes into a pre-allocated flat array (DFS order).
-    private func collectNodes(from view: UIView, into output: inout [[String: Any]]) {
-        let f = view.frame
+    private func collectNodes(from view: UIView, in window: UIWindow, into output: inout [[String: Any]]) {
+        // 🏗️ WINDOW-SPACE COORDINATES: 
+        // We convert the view's local bounds to window-space so the positions 
+        // are absolute. This is crucial for a flat renderer that doesn't 
+        // maintain the original subview hierarchy.
+        let f = view.convert(view.bounds, to: window)
+        
         var node: [String: Any] = [
             "t": self.typeName(of: view),
             "x": self.safeDouble(f.origin.x),
@@ -59,7 +64,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 
         // Recurse into visible, non-transparent subviews
         for sub in view.subviews where !sub.isHidden && sub.alpha > 0.01 {
-            self.collectNodes(from: sub, into: &output)
+            self.collectNodes(from: sub, in: window, into: &output)
         }
     }
 
