@@ -64,36 +64,16 @@ final class SankofaReplayUploader {
             let replayMode: String
             
             switch frame.payload {
-            case .wireframe(let data):
+            case .wireframeNodes(let nodes):
                 replayMode = "wireframe"
-                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-
-                // ─── Flatten recursive view tree into a flat nodes array ───────────────────
-                // The dashboard's WireframeNode is flat: { t, v, x, y, w, h }.
-                // We must NOT send the recursive child tree — flatten with a BFS/DFS pass.
-                var flatNodes: [[String: Any]] = []
-                func flattenNode(_ node: [String: Any]) {
-                    var flat: [String: Any] = [:]
-                    if let t = node["t"] { flat["t"] = t }
-                    if let v = node["v"] { flat["v"] = v }
-                    if let x = node["x"] { flat["x"] = x }
-                    if let y = node["y"] { flat["y"] = y }
-                    if let w = node["w"] { flat["w"] = w }
-                    if let h = node["h"] { flat["h"] = h }
-                    if let hidden = node["hidden"] as? Bool, !hidden { } // skip hidden
-                    flatNodes.append(flat)
-                    if let children = node["c"] as? [[String: Any]] {
-                        children.forEach { flattenNode($0) }
-                    }
-                }
-                flattenNode(json)
-
-                // Build the wireframe event
+                
+                // Build the wireframe event exactly as the dashboard expects.
                 var wireframeEvent: [String: Any] = [
                     "type": "ui_snapshot",
                     "time_offset_ms": 0,
-                    "nodes": flatNodes
+                    "nodes": nodes
                 ]
+                
                 // If there's an active interaction, embed its coords inside the event
                 if let interact = latestInteraction {
                     wireframeEvent["x"] = interact.x
@@ -135,8 +115,8 @@ final class SankofaReplayUploader {
                     
                     return [
                         "type": type,
-                        "x": i.x,
-                        "y": i.y,
+                        "x": safeDouble(i.x),
+                        "y": safeDouble(i.y),
                         "timestamp": Int64(i.timestamp.timeIntervalSince1970 * 1000)
                     ]
                 }
@@ -150,12 +130,19 @@ final class SankofaReplayUploader {
                 return
             }
 
-            // Send plain JSON — backend stores bytes as-is and serves them back directly.
-            // The dashboard's JSON.parse() receives plain JSON and works correctly.
-            request.httpBody = jsonData
+            // 📦 GZIP COMPRESSION: 
+            // We use GZIP to ensure compatibility with the dashboard's `findGzipStart` 
+            // logic, which sniffs for 0x1F 0x8B. By gzipping, we force this header 
+            // to the start of the file, avoiding false positives in the middle of 
+            // plain JSON which were causing SyntaxErrors.
+            let uploadData = jsonData.sankofa_gzipped() ?? jsonData
+            if uploadData.count < jsonData.count {
+                request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+            }
+            request.httpBody = uploadData
 
             URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
-                if let error {
+                if let error = error {
                     self?.logger.warn("❌ [v2] Replay upload failed: \(error.localizedDescription)")
                 } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                     self?.logger.warn("❌ [v2] Replay upload HTTP \(http.statusCode) (Chunk \(currentChunk))")
@@ -166,5 +153,10 @@ final class SankofaReplayUploader {
                 UIApplication.shared.endBackgroundTask(bgTask)
             }.resume()
         }
+    }
+
+    private func safeDouble(_ value: CGFloat) -> Double {
+        let d = Double(value)
+        return d.isFinite ? d : 0.0
     }
 }

@@ -2,13 +2,9 @@ import UIKit
 
 /// Wireframe capture engine.
 ///
-/// Recursively traverses the live `UIView` hierarchy and serialises it as a
-/// lightweight JSON "DOM" — no images, no pixels. This is the default mode.
-///
-/// Advantages:
-///   - Zero bandwidth compared to screenshots.
-///   - 100% privacy-safe (no pixel data ever leaves the device).
-///   - Works on any iOS 14+ device.
+/// Recursively traverses the live `UIView` hierarchy and collects it as a
+/// **pre-flattened** array of node dictionaries ready for JSON encoding.
+/// No intermediate JSON serialization step — nodes are built directly.
 final class SankofaWireframeEngine: SankofaCaptureEngine {
 
     private let sessionId: String
@@ -23,85 +19,80 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             return
         }
 
-        // 🚨 MAIN THREAD SAFETY: Reading `view.bounds`, `view.text`, and 
-        // `view.subviews` MUST happen on the main thread.
-        let tree = serializeView(window)
+        // 🚨 MAIN THREAD SAFETY: Read the entire view hierarchy synchronously
+        // on the main thread, producing a pre-flattened node array.
+        var flatNodes: [[String: Any]] = []
+        collectNodes(from: window, into: &flatNodes)
 
-        // 🚀 Move expensive JSON serialization to a background thread to keep UI smooth.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            
-            guard let data = try? JSONSerialization.data(withJSONObject: tree) else {
-                completion(nil)
-                return
-            }
-
-            let frame = SankofaFrame(
-                sessionId: self.sessionId,
-                timestamp: Date(),
-                payload: .wireframe(data)
-            )
-            completion(frame)
-        }
+        // Payload: pass the flat nodes array directly — no JSON roundtrip needed.
+        let frame = SankofaFrame(
+            sessionId: sessionId,
+            timestamp: Date(),
+            payload: .wireframeNodes(flatNodes)
+        )
+        completion(frame)
     }
 
-    // MARK: - View Tree Serialization
+    // MARK: - Flat Node Collection
 
-    private func serializeView(_ view: UIView) -> [String: Any] {
-        let frame = view.frame
+    /// Recursively collects view nodes into a pre-allocated flat array (DFS order).
+    private func collectNodes(from view: UIView, into output: inout [[String: Any]]) {
+        let f = view.frame
         var node: [String: Any] = [
             "t": typeName(of: view),
-            "x": safeFloat(frame.origin.x),
-            "y": safeFloat(frame.origin.y),
-            "w": safeFloat(frame.size.width),
-            "h": safeFloat(frame.size.height),
-            "hidden": view.isHidden,
-            "alpha": safeFloat(view.alpha)
+            "x": safeDouble(f.origin.x),
+            "y": safeDouble(f.origin.y),
+            "w": safeDouble(f.size.width),
+            "h": safeDouble(f.size.height)
         ]
 
-        // Extract text content where safe (not from secure fields)
+        // Capture text content — only from safe view types
         if let label = view as? UILabel {
-            node["v"] = sanitizeText(label.text)
+            node["v"] = sanitize(label.text)
         } else if let button = view as? UIButton {
-            node["v"] = sanitizeText(button.currentTitle)
+            node["v"] = sanitize(button.currentTitle)
         } else if view is UITextField || view is UITextView {
-            // Never capture text content from input fields
             node["v"] = "[masked]"
-            node["masked"] = true
         }
 
-        // Recurse into visible subviews
-        let children = view.subviews
-            .filter { !$0.isHidden && $0.alpha > 0.01 }
-            .map { serializeView($0) }
+        output.append(node)
 
-        if !children.isEmpty {
-            node["c"] = children
+        // Recurse into visible, non-transparent subviews
+        for sub in view.subviews where !sub.isHidden && sub.alpha > 0.01 {
+            collectNodes(from: sub, into: &output)
         }
-
-        return node
     }
 
-    /// Clamps non-finite CGFloat values to 0 so JSONSerialization never sees NaN/Infinity.
-    private func safeFloat(_ value: CGFloat) -> Double {
+    // MARK: - Helpers
+
+    /// Converts CGFloat to Double, clamping NaN and Infinity to 0.
+    private func safeDouble(_ value: CGFloat) -> Double {
         let d = Double(value)
         return d.isFinite ? d : 0.0
     }
 
-    /// Removes control characters and null bytes from text that could break JSON parsing.
-    private func sanitizeText(_ text: String?) -> String {
+    /// Removes JSON-breaking characters from text:
+    /// - C0 control chars (U+0000–U+001F) except safe whitespace (\t \n \r)
+    /// - U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR
+    ///   (treated as newlines by JS's JSON.parse, breaking string literals)
+    private func sanitize(_ text: String?) -> String {
         guard let text = text, !text.isEmpty else { return "" }
-        // Remove null bytes, control characters (U+0000–U+001F except safe whitespace)
-        let cleaned = text.unicodeScalars.filter { scalar in
+        var result = ""
+        result.reserveCapacity(text.unicodeScalars.count)
+        for scalar in text.unicodeScalars {
             switch scalar.value {
-            case 0x00:          return false  // null byte
-            case 0x01...0x08:   return false  // control characters
-            case 0x0B...0x0C:   return false  // vertical tab, form feed
-            case 0x0E...0x1F:   return false  // remaining controls
-            default:            return true
+            case 0x00:          continue  // null byte
+            case 0x01...0x08:   continue  // C0 controls
+            case 0x0B...0x0C:   continue  // vertical tab, form feed
+            case 0x0E...0x1F:   continue  // remaining C0 controls
+            case 0x7F:          continue  // DEL
+            case 0x80...0x9F:   continue  // C1 controls
+            case 0x2028, 0x2029: continue // JS line/paragraph separators
+            default:
+                result.unicodeScalars.append(scalar)
             }
         }
-        return String(String.UnicodeScalarView(cleaned))
+        return result
     }
 
     private func typeName(of view: UIView) -> String {
