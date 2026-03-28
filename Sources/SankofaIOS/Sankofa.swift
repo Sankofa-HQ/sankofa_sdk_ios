@@ -97,7 +97,7 @@ public final class Sankofa: NSObject {
         observer.start()
 
         if config.recordSessions {
-            coordinator.start()
+            coordinator.start(sessionId: sessionManager.sessionId)
         }
     }
 
