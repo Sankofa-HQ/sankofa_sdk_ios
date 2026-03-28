@@ -81,7 +81,6 @@ public final class Sankofa: NSObject {
         self.lifecycleObserver = observer
 
         let coordinator = SankofaCaptureCoordinator(
-            mode: config.captureMode,
             maskAllInputs: config.maskAllInputs,
             uploader: SankofaReplayUploader(
                 queueManager: qm,
@@ -96,10 +95,6 @@ public final class Sankofa: NSObject {
         observer.start()
 
         if config.recordSessions {
-            coordinator.configure(escalation: EscalationConfig(
-                triggers: Set(config.highFidelityTriggers),
-                highFidelityDuration: config.highFidelityDuration
-            ))
             coordinator.start(sessionId: sessionManager.sessionId)
         }
     }
@@ -151,9 +146,6 @@ public final class Sankofa: NSObject {
 
         logger.log("📈 [v2] track → \(event)")
         queueManager?.enqueue(payload)
-
-        // Let the coordinator check escalation triggers.
-        captureCoordinator?.onEvent(event)
     }
 
     /// Set profile attributes for the current user.

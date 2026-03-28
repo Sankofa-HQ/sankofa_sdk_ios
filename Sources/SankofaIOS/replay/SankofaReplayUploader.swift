@@ -35,42 +35,15 @@ final class SankofaReplayUploader {
             
             // 📦 DYNAMIC PAYLOAD: Wrap in the dashboard-expected JSON schema.
             var envelope: [String: Any] = [:]
-            let replayMode: String
+            // 🎯 THE CHEAT CODE: Extract the rrweb event from the payload.
+            guard case .rrwebEvent(let event) = frame.payload else { return }
             
-            switch frame.payload {
-            case .wireframeNodes(let nodes):
-                replayMode = "wireframe"
-                
-                // Build the wireframe event exactly as the dashboard expects.
-                var wireframeEvent: [String: Any] = [
-                    "type": "ui_snapshot",
-                    "time_offset_ms": 0,
-                    "nodes": nodes
-                ]
-                
-                // If there's an active interaction, embed its coords inside the event
-                if let interact = latestInteraction {
-                    wireframeEvent["x"] = interact.x
-                    wireframeEvent["y"] = interact.y
-                }
-
-                let chunkStartMs = Int64(frame.timestamp.timeIntervalSince1970 * 1000)
-                envelope = [
-                    "mode": "wireframe",
-                    "chunk_start_timestamp": chunkStartMs,
-                    "events": [wireframeEvent]
-                ]
-
-            case .screenshot(let data):
-                replayMode = "screenshot"
-                envelope = [
-                    "mode": "screenshot",
-                    "frames": [[
-                        "timestamp": Int64(frame.timestamp.timeIntervalSince1970 * 1000),
-                        "image_base64": data.base64EncodedString()
-                    ]]
-                ]
-            }
+            let chunkStartMs = Int64(frame.timestamp.timeIntervalSince1970 * 1000)
+            let envelope: [String: Any] = [
+                "mode": "rrweb",
+                "chunk_start_timestamp": chunkStartMs,
+                "events": [event]
+            ]
 
             // Standard mobile metadata
             if let deviceContext {
@@ -102,7 +75,7 @@ final class SankofaReplayUploader {
             finalPayload["_distinct_id"] = self.distinctId
             finalPayload["_session_id"] = frame.sessionId
             finalPayload["_chunk_index"] = currentChunk
-            finalPayload["_replay_mode"] = replayMode
+            finalPayload["_replay_mode"] = "rrweb"
 
             self.queueManager.enqueue(finalPayload, type: "replay_chunk")
             self.logger.log("📹 [v2] Frame queued (\(frame.sessionId)) chunk \(currentChunk)")
