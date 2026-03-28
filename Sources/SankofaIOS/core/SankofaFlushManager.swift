@@ -148,10 +148,10 @@ final class SankofaFlushManager {
             if let id = event.id { pendingIds.insert(id) }
             
             if let payload = try? JSONSerialization.jsonObject(with: event.payload) as? [String: Any] {
-                request.setValue(payload["_session_id"] as? String, forHTTPHeaderField: "X-Session-Id")
-                request.setValue(payload["_distinct_id"] as? String, forHTTPHeaderField: "X-Distinct-Id")
-                request.setValue(payload["_replay_mode"] as? String, forHTTPHeaderField: "X-Replay-Mode")
-                if let idx = payload["_chunk_index"] as? Int {
+                request.setValue(payload["session_id"] as? String, forHTTPHeaderField: "X-Session-Id")
+                request.setValue(payload["distinct_id"] as? String, forHTTPHeaderField: "X-Distinct-Id")
+                request.setValue(payload["replay_mode"] as? String, forHTTPHeaderField: "X-Replay-Mode")
+                if let idx = payload["chunk_index"] as? Int {
                     request.setValue(String(idx), forHTTPHeaderField: "X-Chunk-Index")
                 }
                 

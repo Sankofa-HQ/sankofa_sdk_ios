@@ -14,6 +14,12 @@ final class SankofaReplayUploader {
     private var chunkIndex: Int = 0
     private var distinctId: String = "anonymous"
 
+    private let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
     init(queueManager: SankofaQueueManager, logger: SankofaLogger) {
         self.queueManager = queueManager
         self.logger = logger
@@ -29,18 +35,22 @@ final class SankofaReplayUploader {
 
             let currentChunk = self.chunkIndex
             self.chunkIndex += 1
-
-            // 🚀 INTERACTION PROCESSING: Find the latest interaction for frame-level metadata.
-            let latestInteraction = interactions.last
             
             // 📦 DYNAMIC PAYLOAD: Wrap in the dashboard-expected JSON schema.
             // 🎯 THE CHEAT CODE: Extract the rrweb event from the payload.
             guard case .rrwebEvent(let event) = frame.payload else { return }
             
-            let chunkStartMs = Int64(frame.timestamp.timeIntervalSince1970 * 1000)
+            let dateStr = self.isoFormatter.string(from: frame.timestamp)
+            
             var envelope: [String: Any] = [
                 "mode": "rrweb",
-                "chunk_start_timestamp": chunkStartMs,
+                "session_id": frame.sessionId,
+                "distinct_id": self.distinctId,
+                "chunk_index": currentChunk,
+                "replay_mode": "rrweb",
+                "started_at": dateStr,
+                "ended_at": dateStr, // Single frame, so start == end
+                "event_count": 1,
                 "events": [event]
             ]
 
@@ -70,13 +80,7 @@ final class SankofaReplayUploader {
 
             // KILLER 2 (OOM Cleanup): Immediately encode and flush to SQLite, DO NOT hold in memory.
             // We tag it as 'replay_chunk' so the FlushManager knows where to send it.
-            var finalPayload = envelope
-            finalPayload["_distinct_id"] = self.distinctId
-            finalPayload["_session_id"] = frame.sessionId
-            finalPayload["_chunk_index"] = currentChunk
-            finalPayload["_replay_mode"] = "rrweb"
-
-            self.queueManager.enqueue(finalPayload, type: "replay_chunk")
+            self.queueManager.enqueue(envelope, type: "replay_chunk")
             self.logger.log("📹 [v2] Frame queued (\(frame.sessionId)) chunk \(currentChunk)")
         }
     }
