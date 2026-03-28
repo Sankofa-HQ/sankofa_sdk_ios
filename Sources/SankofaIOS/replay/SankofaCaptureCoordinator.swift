@@ -99,11 +99,14 @@ final class SankofaCaptureCoordinator {
         let interactions = touchInterceptor?.flush() ?? []
         let context = deviceInfo.deviceContext()
 
-        // The engine grabs the image instantly on the main thread, 
-        // and calls the completion handler when the background compression is done.
-        currentEngine.captureFrame { [weak self] frame in
-            guard let self = self, let frame = frame else { return }
-            self.uploader.upload(frame, deviceContext: context, interactions: interactions)
+        // THE FIX: Dispatch asynchronously to the main queue.
+        // This forces the screenshot engine to wait until all pending UI animations 
+        // (like button ripples and touch events) have finished rendering!
+        DispatchQueue.main.async { [weak self] in
+            self?.currentEngine.captureFrame { frame in
+                guard let self = self, let frame = frame else { return }
+                self.uploader.upload(frame, deviceContext: context, interactions: interactions)
+            }
         }
     }
     // MARK: - Escalation (Phase 3)

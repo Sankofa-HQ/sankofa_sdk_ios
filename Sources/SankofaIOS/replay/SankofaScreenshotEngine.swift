@@ -32,7 +32,7 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
         let sensitiveRects = collectSensitiveRects(in: window)
 
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0 
+        format.scale = 0.5 
         let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
 
         let maskedImage = renderer.image { ctx in
