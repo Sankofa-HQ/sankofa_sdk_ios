@@ -92,21 +92,26 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
     // MARK: - rrweb Crawler (High-Fidelity CSS Bridge)
 
     @MainActor
-    private func crawlForRRWeb(view: UIView, window: UIWindow) -> [String: Any] {
+    private func crawlForRRWeb(view: UIView, window: UIWindow, depth: Int = 0) -> [String: Any] {
         let currentId = nodeIdCounter
         nodeIdCounter += 1
         
-        let frame = view.convert(view.bounds, to: window)
+        let frame = view.frame
         var children: [[String: Any]] = []
         
-        // ... (CSS generation logic unchanged) ...
+        // 🎨 1. CORE CSS (Positioning, Sizing, Borders, Backgrounds)
         var css = "position: absolute; "
         css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
         css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
-        css += "box-sizing: border-box; overflow: hidden; "
+        css += "box-sizing: border-box; overflow: hidden; pointer-events: none; "
+        css += "z-index: \(depth); " // Ensure nested views respect layering
         
-        if let bgColor = view.backgroundColor?.sankofa_toHexString(), bgColor != "transparent" {
+        // Background Color Extraction
+        let bgColor = view.backgroundColor?.sankofa_toHexString() ?? "transparent"
+        if bgColor != "transparent" {
             css += "background-color: \(bgColor); "
+        } else if view is UIWindow {
+            css += "background-color: #FFFFFF; " // Fallback for root
         }
         
         if view.layer.cornerRadius > 0 {
@@ -114,7 +119,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         }
         
         if view.layer.borderWidth > 0 {
-            let borderColor = view.layer.borderColor?.sankofa_toHexString() ?? "#000000"
+            let borderColor = view.layer.borderColor?.sankofa_toHexString() ?? "#E5E5EA"
             css += "border: \(Int(view.layer.borderWidth))px solid \(borderColor); "
         }
         
@@ -126,45 +131,60 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         var textContent: String? = nil
         var attributes: [String: String] = [:]
         
-        // Typography & Component Mapping
+        // 🎨 2. COMPONENT MAPPING
         if let label = view as? UILabel {
             tagName = "div" 
-            textContent = label.text
-            let fontSize = Int(label.font.pointSize)
-            let textColor = label.textColor.sankofa_toHexString()
+            textContent = label.text ?? label.attributedText?.string
+            let fontSize = max(8, Int(label.font.pointSize))
+            var textColor = label.textColor.sankofa_toHexString()
+            
+            // Contrast Check / Fallback
+            if textColor == "#FFFFFF" && (bgColor == "transparent" || bgColor == "#FFFFFF") {
+                textColor = "#333333" 
+            }
+            
             var align = "left"
             var justify = "flex-start"
             if label.textAlignment == .center { align = "center"; justify = "center" }
             else if label.textAlignment == .right { align = "right"; justify = "flex-end" }
-            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; text-align: \(align); display: flex; align-items: center; justify-content: \(justify); white-space: pre-wrap; "
+            
+            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; line-height: 1.2; text-align: \(align); display: flex; align-items: center; justify-content: \(justify); white-space: pre-wrap; word-break: break-all; "
         } else if let button = view as? UIButton {
             tagName = "button"
-            textContent = button.currentTitle
+            textContent = button.currentTitle ?? button.titleLabel?.text
             let fontSize = Int(button.titleLabel?.font.pointSize ?? 16)
             let textColor = button.titleLabel?.textColor?.sankofa_toHexString() ?? "#007AFF"
-            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; border: none; outline: none; background-color: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; "
+            // Use button background if present
+            let btnBg = button.backgroundColor?.sankofa_toHexString() ?? "transparent"
+            css += "color: \(textColor); background-color: \(btnBg); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; border: none; outline: none; display: flex; align-items: center; justify-content: center; cursor: pointer; "
+            if button.layer.cornerRadius > 0 { css += "border-radius: \(Int(button.layer.cornerRadius))px; " }
         } else if let textField = view as? UITextField {
             tagName = "input"
             let fontSize = Int(textField.font?.pointSize ?? 14)
             let textColor = textField.textColor?.sankofa_toHexString() ?? "#000000"
-            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; padding: 0 8px; border: 1px solid #ccc; outline: none; "
+            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; padding: 0 8px; border: 1px solid #ccc; outline: none; background-color: #fff; "
             if textField.isSecureTextEntry || maskAllInputs {
                 attributes["type"] = "password"; attributes["value"] = "••••••••"
             } else {
                 attributes["value"] = textField.text ?? textField.placeholder ?? ""
             }
-        } else if view is UIImageView {
+        } else if let imgView = view as? UIImageView {
             tagName = "div"
-            css += "background-color: #E5E5EA; border: 1px solid #D1D1D6; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #8E8E93; font-family: sans-serif; "
-            textContent = "Image Cap"
+            css += "background-color: #F2F2F7; border: 1px solid #D1D1D6; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #8E8E93; font-family: sans-serif; "
+            if imgView.image != nil {
+                textContent = "Image"
+            }
+            if imgView.layer.cornerRadius > 0 { css += "border-radius: \(Int(imgView.layer.cornerRadius))px; " }
         }
         
+        // 🚜 3. RECURSION
         for subview in view.subviews {
             if !subview.isHidden && subview.alpha > 0.01 {
-                children.append(crawlForRRWeb(view: subview, window: window))
+                children.append(crawlForRRWeb(view: subview, window: window, depth: depth + 1))
             }
         }
         
+        // 📝 4. TEXT NODES
         if let text = textContent, !text.isEmpty {
             let tNodeId = nodeIdCounter
             nodeIdCounter += 1
@@ -182,7 +202,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             "type": 2,
             "tagName": tagName,
             "attributes": attributes,
-            "childNodes": children // ALWAYS INCLUDE as per rrweb-snapshot requirement
+            "childNodes": children
         ]
     }
 
