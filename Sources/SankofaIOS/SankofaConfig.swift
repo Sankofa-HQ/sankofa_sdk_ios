@@ -39,6 +39,13 @@ public final class SankofaConfig: NSObject {
     /// Replay capture mode. Defaults to `.wireframe` (zero-image, privacy-safe).
     @objc public var captureMode: SankofaCaptureMode
 
+    /// Events that trigger a temporary switch to high-fidelity (screenshot) mode.
+    /// E.g. ["Checkout Started", "Purchase Completed"]
+    @objc public var highFidelityTriggers: [String]
+
+    /// Duration (in seconds) to stay in screenshot mode after a trigger event.
+    @objc public var highFidelityDuration: TimeInterval
+
     // MARK: - Init
 
     @objc
@@ -50,7 +57,9 @@ public final class SankofaConfig: NSObject {
         batchSize: Int = 50,
         recordSessions: Bool = true,
         maskAllInputs: Bool = true,
-        captureMode: SankofaCaptureMode = .wireframe
+        captureMode: SankofaCaptureMode = .wireframe,
+        highFidelityTriggers: [String] = ["Checkout Started", "Purchase Completed"],
+        highFidelityDuration: TimeInterval = 30
     ) {
         self.endpoint = endpoint
         self.debug = debug
@@ -60,6 +69,8 @@ public final class SankofaConfig: NSObject {
         self.recordSessions = recordSessions
         self.maskAllInputs = maskAllInputs
         self.captureMode = captureMode
+        self.highFidelityTriggers = highFidelityTriggers
+        self.highFidelityDuration = highFidelityDuration
         super.init()
     }
 }

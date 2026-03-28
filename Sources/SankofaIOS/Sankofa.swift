@@ -97,6 +97,10 @@ public final class Sankofa: NSObject {
         observer.start()
 
         if config.recordSessions {
+            coordinator.configure(escalation: EscalationConfig(
+                triggers: Set(config.highFidelityTriggers),
+                highFidelityDuration: config.highFidelityDuration
+            ))
             coordinator.start(sessionId: sessionManager.sessionId)
         }
     }
