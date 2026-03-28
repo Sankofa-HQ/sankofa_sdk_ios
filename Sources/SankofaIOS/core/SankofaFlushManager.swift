@@ -88,29 +88,23 @@ final class SankofaFlushManager {
             await queueManager.flush(limit: batchSize) { [weak self] batch async -> Set<Int64> in
                 guard let self else { return [] }
 
-                var uploadTask: URLSessionDataTask?
-                var bgTask: UIBackgroundTaskIdentifier = .invalid
-
-                // KILLER 1 (Watchdog Cure): Explicitly cancel network task on expiration
-                bgTask = UIApplication.shared.beginBackgroundTask {
-                    uploadTask?.cancel()
-                    if bgTask != .invalid {
-                        UIApplication.shared.endBackgroundTask(bgTask)
-                        bgTask = .invalid
+                var successIds = Set<Int64>()
+                
+                // 1. Separate replay chunks from standard events
+                let replayEvents = batch.filter { $0.type == "replay_chunk" }
+                let standardEvents = batch.filter { $0.type != "replay_chunk" }
+                
+                // 2. Upload replay chunks one by one (as per server expectation)
+                for event in replayEvents {
+                    if await self.uploadReplay(event: event) {
+                        if let id = event.id { successIds.insert(id) }
                     }
                 }
-
-                let successIds = await withCheckedContinuation { continuation in
-                    self.performUpload(batch: batch) { task, ids in
-                        uploadTask = task
-                    } completion: { ids in
-                        continuation.resume(returning: ids)
-                    }
-                }
-
-                if bgTask != .invalid {
-                    UIApplication.shared.endBackgroundTask(bgTask)
-                    bgTask = .invalid
+                
+                // 3. Upload standard events in a batch
+                if !standardEvents.isEmpty {
+                    let standardIds = await self.uploadBatch(events: standardEvents)
+                    successIds.formUnion(standardIds)
                 }
 
                 return successIds
@@ -118,86 +112,89 @@ final class SankofaFlushManager {
         }
     }
 
-    private func performUpload(
-        batch: [SankofaQueueManager.QueuedEvent], 
-        onStart: @escaping (URLSessionDataTask, Set<Int64>) -> Void,
-        completion: @escaping (Set<Int64>) -> Void
-    ) {
+    private func uploadReplay(event: SankofaQueueManager.QueuedEvent) async -> Bool {
         let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-        
-        // KILLER 2 (Routing): Separate replay chunks from standard events
-        let replayEvent = batch.first(where: { $0.type == "replay_chunk" })
-        let isReplay = replayEvent != nil
-        
-        let urlString = isReplay ? "\(base)/api/replay/chunk" : "\(base)/api/v1/batch"
-        guard let url = URL(string: urlString) else {
-            completion([])
-            return
+        guard let url = URL(string: "\(base)/api/replay/chunk"),
+              let payload = try? JSONSerialization.jsonObject(with: event.payload) as? [String: Any] else {
+            return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-
-        var body: Data?
-        var pendingIds = Set<Int64>()
-
-        if isReplay, let event = replayEvent {
-            // Replay chunk is sent individually with metadata headers
-            if let id = event.id { pendingIds.insert(id) }
-            
-            if let payload = try? JSONSerialization.jsonObject(with: event.payload) as? [String: Any] {
-                request.setValue(payload["session_id"] as? String, forHTTPHeaderField: "X-Session-Id")
-                request.setValue(payload["distinct_id"] as? String, forHTTPHeaderField: "X-Distinct-Id")
-                request.setValue(payload["replay_mode"] as? String, forHTTPHeaderField: "X-Replay-Mode")
-                if let idx = payload["chunk_index"] as? Int {
-                    request.setValue(String(idx), forHTTPHeaderField: "X-Chunk-Index")
-                }
-                
-                // GZIP logic (Phase 2)
-                let jsonData = event.payload.sankofa_gzipped() ?? event.payload
-                if jsonData.count < event.payload.count {
-                    request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-                }
-                body = jsonData
-            }
-        } else {
-            // Standard batch upload
-            var operations: [[String: Any]] = []
-            for event in batch.filter({ $0.type != "replay_chunk" }) {
-                guard let payload = try? JSONSerialization.jsonObject(with: event.payload) as? [String: Any],
-                      let id = event.id else { continue }
-                
-                operations.append(["type": event.type, "payload": payload])
-                pendingIds.insert(id)
-            }
-            
-            if !operations.isEmpty {
-                body = try? JSONSerialization.data(withJSONObject: ["operations": operations])
-            }
-        }
-
-        guard let uploadData = body else {
-            completion([])
-            return
-        }
-
-        request.httpBody = uploadData
-        let task = session.dataTask(with: request) { [weak self] data, response, error in
-            var successIds = Set<Int64>()
-            if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                self?.logger.log("✅ Flushed \(isReplay ? "replay chunk" : "\(pendingIds.count) events")")
-                successIds = pendingIds
-            } else if let error = error {
-                self?.logger.warn("❌ Flush network error: \(error.localizedDescription)")
-            } else if let http = response as? HTTPURLResponse {
-                self?.logger.warn("❌ Flush rejected (HTTP \(http.statusCode))")
-            }
-            completion(successIds)
-        }
         
-        onStart(task, pendingIds)
-        task.resume()
+        // Metadata headers
+        request.setValue(payload["session_id"] as? String, forHTTPHeaderField: "X-Session-Id")
+        request.setValue(payload["distinct_id"] as? String, forHTTPHeaderField: "X-Distinct-Id")
+        request.setValue(payload["replay_mode"] as? String, forHTTPHeaderField: "X-Replay-Mode")
+        if let idx = payload["chunk_index"] as? Int {
+            request.setValue(String(idx), forHTTPHeaderField: "X-Chunk-Index")
+        }
+
+        // GZIP logic
+        let jsonData = event.payload.sankofa_gzipped() ?? event.payload
+        if jsonData.count < event.payload.count {
+            request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+        }
+
+        request.httpBody = jsonData
+
+        return await withCheckedContinuation { continuation in
+            session.dataTask(with: request) { [weak self] data, response, error in
+                if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                    self?.logger.log("✅ Flushed replay chunk")
+                    continuation.resume(returning: true)
+                } else {
+                    let http = response as? HTTPURLResponse
+                    let status = http?.statusCode ?? 0
+                    let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? "no body"
+                    self?.logger.warn("❌ Replay rejected (HTTP \(status)): \(body)")
+                    continuation.resume(returning: false)
+                }
+            }.resume()
+        }
+    }
+
+    private func uploadBatch(events: [SankofaQueueManager.QueuedEvent]) async -> Set<Int64> {
+        let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
+        guard let url = URL(string: "\(base)/api/v1/batch") else { return [] }
+
+        var operations: [[String: Any]] = []
+        var pendingIds = Set<Int64>()
+        
+        for event in events {
+            guard let payload = try? JSONSerialization.jsonObject(with: event.payload) as? [String: Any],
+                  let id = event.id else { continue }
+            
+            operations.append(["type": event.type, "payload": payload])
+            pendingIds.insert(id)
+        }
+
+        guard !operations.isEmpty,
+              let body = try? JSONSerialization.data(withJSONObject: ["operations": operations]) else {
+            return []
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.httpBody = body
+
+        return await withCheckedContinuation { continuation in
+            session.dataTask(with: request) { [weak self] data, response, error in
+                if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                    self?.logger.log("✅ Flushed \(pendingIds.count) events")
+                    continuation.resume(returning: pendingIds)
+                } else {
+                    let http = response as? HTTPURLResponse
+                    let status = http?.statusCode ?? 0
+                    let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? "no body"
+                    self?.logger.warn("❌ Batch rejected (HTTP \(status)): \(body)")
+                    continuation.resume(returning: [])
+                }
+            }.resume()
+        }
     }
 }
