@@ -9,7 +9,7 @@ final class SankofaReplayUploader {
 
     private let queueManager: SankofaQueueManager
     private let logger: SankofaLogger
-    private let uploadQueue = DispatchQueue(label: "dev.sankofa.replay.upload", qos: .background)
+    private let uploadQueue = DispatchQueue(label: "dev.sankofa.replay.upload", qos: .utility)
     
     private var chunkIndex: Int = 0
     private var distinctId: String = "anonymous"

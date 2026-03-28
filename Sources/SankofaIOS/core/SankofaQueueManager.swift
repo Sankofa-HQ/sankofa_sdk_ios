@@ -28,6 +28,11 @@ final class SankofaQueueManager {
     private let db: DatabasePool
     private let logger: SankofaLogger
     private let lock = NSLock()
+    
+    // 💨 PERFORMANCE FIX: Serial queue for DB writes to avoid priority inversion.
+    // We use .utility QoS to ensure it doesn't starve the Main Thread but stays
+    // ahead of .background tasks.
+    private let writeQueue = DispatchQueue(label: "dev.sankofa.database.write", qos: .utility)
 
     // MARK: - Init
 
@@ -75,14 +80,23 @@ final class SankofaQueueManager {
             logger.warn("❌ Could not serialise event")
             return
         }
+        
         let eventType = type ?? (event["type"] as? String ?? "track")
-        var record = QueuedEvent(id: nil, type: eventType, payload: data, createdAt: Date())
-        do {
-            // Sync write is fine here as it's a simple record insertion.
-            try db.write { db in try record.insert(db) }
-            logger.log("📥 Queued '\(eventType)' (total: \(count()))")
-        } catch {
-            logger.warn("❌ Failed to enqueue: \(error)")
+        let createdAt = Date()
+        
+        // 💨 ASYNC WRITE: Offload to serial queue to prevent priority inversion.
+        // This ensures tracking from the Main Thread doesn't wait on background replays.
+        writeQueue.async { [weak self] in
+            guard let self else { return }
+            
+            var record = QueuedEvent(id: nil, type: eventType, payload: data, createdAt: createdAt)
+            do {
+                try self.db.write { db in try record.insert(db) }
+                // 📉 OPTIMIZATION: Removed .count() call from log to save one DB read per insert.
+                self.logger.log("📥 Queued '\(eventType)'")
+            } catch {
+                self.logger.warn("❌ Failed to enqueue '\(eventType)': \(error)")
+            }
         }
     }
 
