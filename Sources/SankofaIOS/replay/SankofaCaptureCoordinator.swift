@@ -36,11 +36,6 @@ final class SankofaCaptureCoordinator {
     private var escalationConfig: EscalationConfig?
     private var escalationTimer: Timer?
 
-    struct EscalationConfig {
-        var triggers: Set<String>
-        var highFidelityDuration: TimeInterval
-    }
-
     // MARK: - Init
 
     init(mode: SankofaCaptureMode, maskAllInputs: Bool, uploader: SankofaReplayUploader) {
@@ -148,5 +143,11 @@ final class WeakProxy {
     @objc func onTick() {
         target?.tick()
     }
+}
+
+/// Configuration for temporary high-fidelity (screenshot) mode triggered by events.
+struct EscalationConfig {
+    var triggers: Set<String>
+    var highFidelityDuration: TimeInterval
 }
 
