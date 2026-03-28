@@ -126,13 +126,9 @@ final class SankofaReplayUploader {
                 return
             }
 
-            // GZIP Compression (RFC 1952 standard)
-            if let gzipped = jsonData.sankofa_gzipped() {
-                request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-                request.httpBody = gzipped
-            } else {
-                request.httpBody = jsonData
-            }
+            // Send plain JSON — backend stores bytes as-is and serves them back directly.
+            // The dashboard's JSON.parse() receives plain JSON and works correctly.
+            request.httpBody = jsonData
 
             URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
                 if let error {
