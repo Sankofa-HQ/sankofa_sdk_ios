@@ -38,7 +38,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
                 RRWebNode(
                     id: 2, type: 2, tagName: "html", attributes: [:],
                     childNodes: [
-                        RRWebNode(id: 3, type: 2, tagName: "head", attributes: [:], childNodes: []),
+                        RRWebNode(id: 3, type: 2, tagName: "head", attributes: [:], childNodes: [], textContent: nil),
                         RRWebNode(
                             id: 4, type: 2, tagName: "body", 
                             // Force the body to match the iPhone's exact screen dimensions so it doesn't collapse
