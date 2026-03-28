@@ -51,24 +51,21 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         let frame = view.frame
         var node: [String: Any] = [
             "t": typeName(of: view),
-            "x": frame.origin.x,
-            "y": frame.origin.y,
-            "w": frame.size.width,
-            "h": frame.size.height,
+            "x": safeFloat(frame.origin.x),
+            "y": safeFloat(frame.origin.y),
+            "w": safeFloat(frame.size.width),
+            "h": safeFloat(frame.size.height),
             "hidden": view.isHidden,
-            "alpha": view.alpha
+            "alpha": safeFloat(view.alpha)
         ]
 
         // Extract text content where safe (not from secure fields)
         if let label = view as? UILabel {
-            node["v"] = label.text ?? ""
+            node["v"] = sanitizeText(label.text)
         } else if let button = view as? UIButton {
-            node["v"] = button.currentTitle ?? ""
-        } else if let textField = view as? UITextField {
-            // Never capture text content from text fields
-            node["v"] = "[masked]"
-            node["masked"] = true
-        } else if let textView = view as? UITextView {
+            node["v"] = sanitizeText(button.currentTitle)
+        } else if view is UITextField || view is UITextView {
+            // Never capture text content from input fields
             node["v"] = "[masked]"
             node["masked"] = true
         }
@@ -85,19 +82,41 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         return node
     }
 
+    /// Clamps non-finite CGFloat values to 0 so JSONSerialization never sees NaN/Infinity.
+    private func safeFloat(_ value: CGFloat) -> Double {
+        let d = Double(value)
+        return d.isFinite ? d : 0.0
+    }
+
+    /// Removes control characters and null bytes from text that could break JSON parsing.
+    private func sanitizeText(_ text: String?) -> String {
+        guard let text = text, !text.isEmpty else { return "" }
+        // Remove null bytes, control characters (U+0000–U+001F except safe whitespace)
+        let cleaned = text.unicodeScalars.filter { scalar in
+            switch scalar.value {
+            case 0x00:          return false  // null byte
+            case 0x01...0x08:   return false  // control characters
+            case 0x0B...0x0C:   return false  // vertical tab, form feed
+            case 0x0E...0x1F:   return false  // remaining controls
+            default:            return true
+            }
+        }
+        return String(String.UnicodeScalarView(cleaned))
+    }
+
     private func typeName(of view: UIView) -> String {
         switch view {
-        case is UILabel:      return "Label"
-        case is UIButton:     return "Button"
-        case is UITextField:  return "TextField"
-        case is UITextView:   return "TextView"
-        case is UIImageView:  return "Image"
-        case is UIScrollView: return "ScrollView"
-        case is UISwitch:     return "Switch"
-        case is UISlider:     return "Slider"
-        case is UITableView:  return "TableView"
+        case is UILabel:          return "Label"
+        case is UIButton:         return "Button"
+        case is UITextField:      return "TextField"
+        case is UITextView:       return "TextView"
+        case is UIImageView:      return "Image"
+        case is UIScrollView:     return "ScrollView"
+        case is UISwitch:         return "Switch"
+        case is UISlider:         return "Slider"
+        case is UITableView:      return "TableView"
         case is UICollectionView: return "CollectionView"
-        default:              return "View"
+        default:                  return "View"
         }
     }
 }
