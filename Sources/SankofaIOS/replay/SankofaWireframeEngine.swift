@@ -1,23 +1,23 @@
 import UIKit
+import SwiftUI
 
-/// High-Fidelity rrweb Replay Engine (Phase 25 — The CSS Bridge).
+/// High-Fidelity rrweb Replay Engine (Phase 28 — The High-Fidelity Compiler).
 ///
-/// This engine acts as a real-time iOS-to-CSS compiler. It recursively traverses 
-/// the live UIView hierarchy and transforms every view, label, and button into 
-/// an rrweb-compliant HTML node with pixel-perfect inline CSS.
+/// This engine acts as a real-time iOS-to-CSS compiler. It recursively traverses
+/// the live UIView hierarchy and transforms every view, label, and button into
+/// an rrweb-compliant DOM tree with pixel-perfect inline CSS.
 final class SankofaWireframeEngine: SankofaCaptureEngine {
-
     private let sessionId: String
+    private let maskAllInputs: Bool
     private var nodeIdCounter = 1
-    private let maskAllInputs: Bool = true // Standard for enterprise recording
 
-    init(sessionId: String) {
+    init(sessionId: String, maskAllInputs: Bool = true) {
         self.sessionId = sessionId
+        self.maskAllInputs = maskAllInputs
     }
 
     // MARK: - SankofaCaptureEngine
 
-    // KILLER 4 (Concurrency): @MainActor prevents Main Thread Checker crashes
     @MainActor
     func captureFrame(completion: @escaping (SankofaFrame?) -> Void) {
         guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
@@ -25,271 +25,183 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             return
         }
 
+        // 1. Build the High-Fidelity DOM Tree
         nodeIdCounter = 1
-        let timestampMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let frameSize = window.bounds.size
+        let domTree = crawlForRRWeb(view: window, window: window)
         
-        // --- 1. Meta Event (Type 4) ---
-        // Tells the player the viewport dimensions so it can scale to "phone size"
-        let metaEvent: [String: Any] = [
-            "type": 4,
-            "timestamp": timestampMs,
-            "data": [
-                "href": "ios-app://\(Bundle.main.bundleIdentifier ?? "sankofa")",
-                "width": Int(frameSize.width),
-                "height": Int(frameSize.height)
-            ]
-        ]
-
-        nodeIdCounter = 4 // Reserve 1=Doc, 2=HTML, 3=Body
-        let iosRoot = self.crawlForRRWeb(view: window, window: window)
-        
-        let rootNode: [String: Any] = [
-            "id": 1,
-            "type": 0, // Document
-            "childNodes": [
-                [
-                    "id": 2,
-                    "type": 2, // Element
-                    "tagName": "html",
-                    "attributes": ["lang": "en"],
-                    "childNodes": [
-                        [
-                            "id": 3,
-                            "type": 2, // Element
-                            "tagName": "body",
-                            "attributes": ["style": "margin: 0; padding: 0; background: #000; "],
-                            "childNodes": [iosRoot]
-                        ]
-                    ]
-                ]
-            ]
-        ]
-        
-        // nodeIdCounter is now > 4 from the crawl
-        
-        let snapshotEvent: [String: Any] = [
-            "type": 2,
-            "timestamp": timestampMs + 1,
-            "data": [
-                "node": rootNode,
-                "initialOffset": ["left": 0, "top": 0]
-            ]
-        ]
-
-
-        // --- 3. Pack Both Events (Meta + Snapshot) ---
-        let chunkEvents = [metaEvent, snapshotEvent]
-        let unifiedFrame = SankofaFrame(
-            sessionId: sessionId,
-            timestamp: Date(),
-            payload: SankofaFrame.Payload.rrwebEvent(["events": chunkEvents])
-        )
-        
-        completion(unifiedFrame)
+        // 2. Offload JSON encoding to background thread
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let jsonData = try JSONEncoder().encode(domTree)
+                let frame = SankofaFrame(
+                    sessionId: self.sessionId,
+                    timestamp: Date(),
+                    payload: .wireframe(jsonData)
+                )
+                completion(frame)
+            } catch {
+                completion(nil)
+            }
+        }
     }
 
     // MARK: - rrweb Crawler (High-Fidelity CSS Bridge)
 
     @MainActor
-    private func crawlForRRWeb(view: UIView, window: UIWindow, depth: Int = 0) -> [String: Any] {
+    private func crawlForRRWeb(view: UIView, window: UIWindow) -> RRWebNode {
         let currentId = nodeIdCounter
         nodeIdCounter += 1
         
-        let frame = view.frame
-        var children: [[String: Any]] = []
-        let traits = window.traitCollection
+        // Convert local bounds to window-space coordinates
+        let frame = view.convert(view.bounds, to: window)
+        var children: [RRWebNode] = []
+        var css = buildBaseCSS(for: view, frame: frame)
         
-        // 🎨 1. CORE CSS + PREMIUM AESTHETICS
-        var css = "position: absolute; "
-        css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
-        css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
-        css += "box-sizing: border-box; overflow: visible; pointer-events: none; "
-        css += "z-index: \(depth * 10); " // Increase spacing to prevent clipping
-        
-        // Background & Gradients
-        if let gradientLayer = view.layer as? CAGradientLayer, let colors = gradientLayer.colors as? [CGColor] {
-            let hexColors = colors.map { UIColor(cgColor: $0).resolvedColor(with: traits).sankofa_toHexString() }
-            css += "background: linear-gradient(180deg, \(hexColors.joined(separator: ", "))); "
-        } else if let bgColor = view.backgroundColor?.resolvedColor(with: traits).sankofa_toHexString(), bgColor != "transparent" {
-            css += "background-color: \(bgColor); "
-        } else if view is UIWindow {
-            css += "background-color: \(traits.userInterfaceStyle == .dark ? "#1C1C1E" : "#F2F2F7"); "
-        }
-        
-        // Borders & Radius
-        if view.layer.cornerRadius > 0 { css += "border-radius: \(Int(view.layer.cornerRadius))px; " }
-        if view.layer.borderWidth > 0 {
-            let borderColor = view.layer.borderColor != nil ? UIColor(cgColor: view.layer.borderColor!).resolvedColor(with: traits).sankofa_toHexString() : "#E5E5EA"
-            css += "border: \(Int(view.layer.borderWidth))px solid \(borderColor); "
-        }
-        
-        // ✨ PREMIUM: Shadows
-        if view.layer.shadowOpacity > 0 {
-            let sColor = view.layer.shadowColor != nil ? UIColor(cgColor: view.layer.shadowColor!).resolvedColor(with: traits).sankofa_toHexString() : "#000000"
-            let sOpacity = view.layer.shadowOpacity
-            css += "box-shadow: \(Int(view.layer.shadowOffset.width))px \(Int(view.layer.shadowOffset.height))px \(Int(view.layer.shadowRadius))px rgba(\(sColor), \(sOpacity)); "
-        }
-        
-        if view.alpha < 0.99 { css += "opacity: \(String(format: "%.2f", view.alpha)); " }
-
         var tagName = "div"
         var textContent: String? = nil
         var attributes: [String: String] = [:]
         
-        // 🎨 2. COMPONENT MAPPING
+        // 1. Typography & UI Element Mapping
         if let label = view as? UILabel {
-            tagName = "div" 
             textContent = label.text ?? label.attributedText?.string
-            let fontSize = max(8, Int(label.font.pointSize))
-            let weight = label.font.fontDescriptor.symbolicTraits.contains(.traitBold) ? "bold" : "normal"
-            let textColor = label.textColor.resolvedColor(with: traits).sankofa_toHexString()
+            css += typographyCSS(font: label.font, color: label.textColor, alignment: label.textAlignment)
             
-            let alignMapping: [NSTextAlignment: (String, String)] = [
-                .center: ("center", "center"),
-                .right: ("right", "flex-end")
-            ]
-            let (align, justify) = alignMapping[label.textAlignment] ?? ("left", "flex-start")
-            css += "color: \(textColor); font-family: -apple-system, system-ui, sans-serif; font-size: \(fontSize)px; font-weight: \(weight); line-height: 1.2; text-align: \(align); display: flex; align-items: center; justify-content: \(justify); white-space: pre-wrap; word-break: break-all; "
         } else if let button = view as? UIButton {
             tagName = "button"
             textContent = button.currentTitle ?? button.titleLabel?.text ?? button.attributedTitle(for: .normal)?.string
-            let textColor = button.titleLabel?.textColor?.resolvedColor(with: traits).sankofa_toHexString() ?? "#007AFF"
-            let btnBg = button.backgroundColor?.resolvedColor(with: traits).sankofa_toHexString() ?? "transparent"
-            css += "color: \(textColor); background-color: \(btnBg); font-family: -apple-system, system-ui, sans-serif; font-weight: 600; border: none; outline: none; display: flex; align-items: center; justify-content: center; position: relative; "
+            css += typographyCSS(font: button.titleLabel?.font, color: button.titleLabel?.textColor, alignment: .center)
+            css += "border: none; outline: none; cursor: pointer; "
             
-            if let img = button.currentImage {
-                let tint = button.tintColor?.resolvedColor(with: traits) ?? .black
-                let bNodeId = nodeIdCounter
-                nodeIdCounter += 1
-                children.append([
-                    "id": bNodeId,
-                    "type": 2,
-                    "tagName": "img",
-                    "attributes": ["src": "data:image/png;base64,\(img.sankofa_toBase64(tintColor: tint))", "style": "max-height: 80%; max-width: 80%; object-fit: contain; "],
-                    "childNodes": []
-                ])
-            }
-        } else if let imgView = view as? UIImageView, let img = imgView.image {
-            tagName = "img"
-            let tint = imgView.tintColor?.resolvedColor(with: traits) ?? .black
-            attributes["src"] = "data:image/png;base64,\(img.sankofa_toBase64(tintColor: tint))"
-            css += "object-fit: contain; "
         } else if let textField = view as? UITextField {
             tagName = "input"
-            let textColor = textField.textColor?.resolvedColor(with: traits).sankofa_toHexString() ?? "#000000"
-            css += "color: \(textColor); padding: 0 12px; border-radius: 8px; border: 1px solid #E5E5EA; background-color: #fff; font-size: 14px; "
-            if textField.isSecureTextEntry || maskAllInputs {
-                attributes["type"] = "password"; attributes["value"] = "••••••••"
+            css += typographyCSS(font: textField.font, color: textField.textColor, alignment: textField.textAlignment)
+            css += "padding: 0 12px; outline: none; "
+            
+            if maskAllInputs || textField.isSecureTextEntry {
+                attributes["type"] = "password"
+                attributes["value"] = "••••••••"
             } else {
                 attributes["value"] = textField.text ?? textField.placeholder ?? ""
             }
-        }
-
-        // 🚜 3. RECURSION
-        for subview in view.subviews {
-            if !subview.isHidden && subview.alpha > 0.01 {
-                children.append(crawlForRRWeb(view: subview, window: window, depth: depth + 1))
+            
+        } else if let imageView = view as? UIImageView, let image = imageView.image {
+            // TINTED SF SYMBOLS & IMAGES -> Base64 Data URI
+            tagName = "img"
+            let tinted = image.withTintColor(imageView.tintColor ?? .black)
+            // Using jpegData with small compression to keep frame payload tiny
+            if let data = tinted.jpegData(compressionQuality: 0.1) {
+                attributes["src"] = "data:image/jpeg;base64,\(data.base64EncodedString())"
+            }
+            css += "object-fit: contain; "
+            
+        } else {
+            // SWIFTUI TEXT EXTRACTION (Phase 28 Hack)
+            // If it's a generic UIView, use reflection/accessibility to see if it's hiding SwiftUI Text
+            if let swiftUIText = extractSwiftUIText(from: view) {
+                textContent = swiftUIText
+                css += "color: \(view.tintColor?.toHexString() ?? "#000"); font-family: -apple-system, system-ui; font-size: 15px; font-weight: 500; display: flex; align-items: center; "
             }
         }
-        
-        // 🚜 4. SwiftUI Reflection (The "Do It Well" Hack)
-        if textContent == nil {
-            textContent = self.extractSwiftUIText(from: view)
-        }
 
-        // 📝 5. TEXT NODES
-        if let text = textContent, !text.isEmpty {
-            let tNodeId = nodeIdCounter
-            nodeIdCounter += 1
-            children.append([
-                "id": tNodeId,
-                "type": 3,
-                "textContent": self.sanitize(text)
-            ])
-        }
-        
+        // Apply final compiled CSS
         attributes["style"] = css
         
-        return [
-            "id": currentId,
-            "type": 2,
-            "tagName": tagName,
-            "attributes": attributes,
-            "childNodes": children
-        ]
-    }
-
-    /// Uses Reflection to find text inside SwiftUI views
-    private func extractSwiftUIText(from view: UIView) -> String? {
-        // 1. Check Accessibility first
-        if let val = view.accessibilityLabel ?? view.accessibilityValue, !val.isEmpty {
-            return val
+        // 2. Recursive Child Mapping (Ignore hidden to save CPU)
+        for subview in view.subviews {
+            if !subview.isHidden && subview.alpha > 0.01 {
+                children.append(crawlForRRWeb(view: subview, window: window))
+            }
         }
         
-        // 2. Reflection Hack (Mirror)
+        // 3. Attach text as RRWeb TextNode (Type 3)
+        if let text = textContent, !text.isEmpty {
+            let textNodeId = nodeIdCounter
+            nodeIdCounter += 1
+            let textNode = RRWebNode(id: textNodeId, type: 3, tagName: nil, attributes: nil, childNodes: nil, textContent: text)
+            children.append(textNode)
+        }
+        
+        return RRWebNode(id: currentId, type: 2, tagName: tagName, attributes: attributes, childNodes: children.isEmpty ? nil : children, textContent: nil)
+    }
+
+    // MARK: - Advanced CSS Compilers
+
+    private func buildBaseCSS(for view: UIView, frame: CGRect) -> String {
+        var css = "position: absolute; box-sizing: border-box; "
+        css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
+        css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
+        
+        // Shadows (Phase 28)
+        if view.layer.shadowOpacity > 0 {
+            let dx = view.layer.shadowOffset.width
+            let dy = view.layer.shadowOffset.height
+            let blur = view.layer.shadowRadius
+            let opacity = view.layer.shadowOpacity
+            css += "box-shadow: \(Int(dx))px \(Int(dy))px \(Int(blur))px rgba(0,0,0,\(opacity)); "
+        }
+        
+        // Gradients (Phase 28)
+        var hasGradient = false
+        if let sublayers = view.layer.sublayers {
+            for layer in sublayers {
+                if let grad = layer as? CAGradientLayer, let colors = grad.colors as? [CGColor] {
+                    let colorStrings = colors.map { $0.toHexString() }.joined(separator: ", ")
+                    css += "background: linear-gradient(to bottom right, \(colorStrings)); "
+                    hasGradient = true
+                    break
+                }
+            }
+        }
+        
+        if !hasGradient, let bgColor = view.backgroundColor?.toHexString(), bgColor != "transparent" {
+            css += "background-color: \(bgColor); "
+        }
+        
+        if view.layer.cornerRadius > 0 {
+            css += "border-radius: \(Int(view.layer.cornerRadius))px; "
+            if view.clipsToBounds { css += "overflow: hidden; " }
+        }
+        
+        if view.layer.borderWidth > 0 {
+            css += "border: \(Int(view.layer.borderWidth))px solid \(view.layer.borderColor?.toHexString() ?? "#000"); "
+        }
+        
+        if view.alpha < 1.0 { css += "opacity: \(String(format: "%.2f", view.alpha)); " }
+        
+        return css
+    }
+
+    private func typographyCSS(font: UIFont?, color: UIColor?, alignment: NSTextAlignment) -> String {
+        let f = font ?? UIFont.systemFont(ofSize: 14)
+        let fontSize = f.pointSize
+        let hexColor = color?.toHexString() ?? "#000000"
+        
+        // Phase 28: Typography Mapping
+        let isBold = f.fontDescriptor.symbolicTraits.contains(.traitBold)
+        let weight = isBold ? "600" : "400"
+        
+        var align = "left"
+        if alignment == .center { align = "center" }
+        else if alignment == .right { align = "right" }
+        
+        return "color: \(hexColor); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: \(Int(fontSize))px; font-weight: \(weight); letter-spacing: -0.3px; text-align: \(align); display: flex; align-items: center; justify-content: \(align == "center" ? "center" : align == "right" ? "flex-end" : "flex-start"); white-space: pre-wrap; "
+    }
+
+    private func extractSwiftUIText(from view: UIView) -> String? {
+        // Fallback 1: SwiftUI automatically bridges Text() to accessibilityLabel
+        if let accLabel = view.accessibilityLabel, !accLabel.isEmpty, view.accessibilityTraits.contains(.staticText) {
+            return accLabel
+        }
+        
+        // Fallback 2: The Phase 28 Mirror Hack
         let mirror = Mirror(reflecting: view)
         for child in mirror.children {
-            if child.label == "text" || child.label == "_text" {
-                return "\(child.value)"
+            if let label = child.label, label.lowercased().contains("text"), let textValue = child.value as? String {
+                return textValue
             }
         }
-        
-        // 3. Subview Class Drill (SwiftUI rendering uses specific internal classes)
-        let className = String(describing: type(of: view))
-        if className.contains("DrawingView") || className.contains("TextView") {
-            // Recurse into sublayers or descriptions if needed, 
-            // but for now Mirror/Accessibility covers 90%.
-        }
-        
         return nil
     }
-
-    // MARK: - Helpers
-
-    private func sanitize(_ text: String) -> String {
-        var result = ""
-        for scalar in text.unicodeScalars {
-            switch scalar.value {
-            case 0x00, 0x01...0x08, 0x0B...0x0C, 0x0E...0x1F, 0x7F, 0x80...0x9F, 0x2028, 0x2029:
-                continue
-            default:
-                result.unicodeScalars.append(scalar)
-            }
-        }
-        return result
-    }
 }
 
-// MARK: - Visual Helpers
-
-extension UIImage {
-    func sankofa_toBase64(tintColor: UIColor? = nil) -> String {
-        // PostHog Image Hack: Scale down and TINT for SF Symbols
-        let newSize = CGSize(width: size.width * 0.7, height: size.height * 0.7)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        let scaledImage = renderer.image { context in
-            if let tint = tintColor {
-                tint.setFill()
-                context.fill(CGRect(origin: .zero, size: newSize))
-                self.draw(in: CGRect(origin: .zero, size: newSize), blendMode: .destinationIn, alpha: 1.0)
-            } else {
-                self.draw(in: CGRect(origin: .zero, size: newSize))
-            }
-        }
-        return scaledImage.pngData()?.base64EncodedString() ?? ""
-    }
-}
-
-extension UIColor {
-    func sankofa_toHexString() -> String {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        if self.getRed(&r, green: &g, blue: &b, alpha: &a) {
-            return String(format: "#%02X%02X%02X",
-                          Int(r * 255),
-                          Int(g * 255),
-                          Int(b * 255))
-        }
-        return "#FFFFFF"
-    }
-}

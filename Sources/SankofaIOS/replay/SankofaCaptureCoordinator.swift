@@ -17,16 +17,16 @@ final class SankofaCaptureCoordinator {
 
     // MARK: - Engines
 
-    private lazy var replayEngine = SankofaWireframeEngine(sessionId: sessionId)
+    private lazy var replayEngine = SankofaWireframeEngine(sessionId: sessionId, maskAllInputs: maskAllInputs)
 
     private let deviceInfo = SankofaDeviceInfo()
     private var touchInterceptor: SankofaTouchInterceptor?
 
-    // MARK: - Scheduler
+    // MARK: - Scheduler (Phase 28 Idle Sniper)
 
-    private var displayLink: CADisplayLink?
-    private var frameCounter: Int = 0
-    private var skipFrames: Int = 0
+    private var runLoopObserver: CFRunLoopObserver?
+    private var lastCaptureTime: TimeInterval = 0
+    private let targetInterval: TimeInterval = 0.5 // 2 FPS
 
     // MARK: - Init
 
@@ -39,9 +39,7 @@ final class SankofaCaptureCoordinator {
 
     func start(sessionId: String = "") {
         self.sessionId = sessionId.isEmpty ? "session_\(UUID().uuidString)" : sessionId
-        replayEngine = SankofaWireframeEngine(sessionId: self.sessionId)
-        
-        skipFrames = max(0, Int(60.0 / targetFPS) - 1)
+        replayEngine = SankofaWireframeEngine(sessionId: self.sessionId, maskAllInputs: maskAllInputs)
         
         if let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) {
             let interceptor = SankofaTouchInterceptor(target: nil, action: nil)
@@ -49,47 +47,40 @@ final class SankofaCaptureCoordinator {
             self.touchInterceptor = interceptor
         }
 
-        let proxy = WeakProxy(self)
-        let link = CADisplayLink(target: proxy, selector: #selector(WeakProxy.onTick))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
+        // The Phase 28 Idle Sniper: Ensures zero UI blocking by only triggering 
+        // when the run loop is about to sleep (i.e., finished all UI work).
+        let observer = CFRunLoopObserverCreateWithHandler(
+            kCFAllocatorDefault,
+            CFRunLoopActivity.beforeWaiting.rawValue,
+            true,
+            0
+        ) { [weak self] _, _ in
+            guard let self = self else { return }
+            
+            let now = CACurrentMediaTime()
+            if (now - self.lastCaptureTime) >= self.targetInterval {
+                self.lastCaptureTime = now
+                
+                // Safe to run the heavy CSS crawler!
+                let interactions = self.touchInterceptor?.flush() ?? []
+                let context = self.deviceInfo.deviceContext()
+                
+                self.replayEngine.captureFrame { [weak self] frame in
+                    guard let self = self, let frame = frame else { return }
+                    self.uploader.upload(frame, deviceContext: context, interactions: interactions)
+                }
+            }
+        }
+        
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        self.runLoopObserver = observer
     }
 
     func stop() {
-        displayLink?.invalidate()
-        displayLink = nil
-    }
-
-    // MARK: - Capture Tick
-
-    @MainActor
-    @objc internal func tick() {
-        frameCounter += 1
-        guard frameCounter > skipFrames else { return }
-        frameCounter = 0
-
-        let interactions = touchInterceptor?.flush() ?? []
-        let context = deviceInfo.deviceContext()
-
-        replayEngine.captureFrame { [weak self] frame in
-            guard let self = self, let frame = frame else { return }
-            self.uploader.upload(frame, deviceContext: context, interactions: interactions)
+        if let observer = runLoopObserver {
+            CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
+            runLoopObserver = nil
         }
     }
 }
 
-// MARK: - WeakProxy
-
-/// Breaks the CADisplayLink retain cycle by holding a weak reference to the target.
-@MainActor
-final class WeakProxy {
-    private weak var target: SankofaCaptureCoordinator?
-
-    init(_ target: SankofaCaptureCoordinator) {
-        self.target = target
-    }
-
-    @objc func onTick() {
-        target?.tick()
-    }
-}

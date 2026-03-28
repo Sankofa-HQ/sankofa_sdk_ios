@@ -9,14 +9,27 @@ protocol SankofaCaptureEngine: AnyObject {
     func captureFrame(completion: @escaping (SankofaFrame?) -> Void)
 }
 
+/// A captured high-fidelity DOM node for rrweb snapshots.
+struct RRWebNode: Codable {
+    let id: Int
+    let type: Int
+    let tagName: String?
+    let attributes: [String: String]?
+    let childNodes: [RRWebNode]?
+    let textContent: String?
+}
+
 /// A captured frame ready for upload.
 struct SankofaFrame {
     enum Payload {
-        /// rrweb engine output: full-snapshot JSON event tree.
+        /// Type 2 (Incremental) / Type 3 (Full Snapshot) / Meta (Type 4)
         case rrwebEvent([String: Any])
+        /// High-fidelity wireframe snapshot (Phase 28)
+        case wireframe(Data)
     }
 
     let sessionId: String
     let timestamp: Date
     let payload: Payload
 }
+

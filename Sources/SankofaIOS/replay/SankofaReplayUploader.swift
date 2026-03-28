@@ -37,17 +37,57 @@ final class SankofaReplayUploader {
             self.chunkIndex += 1
             
             // 📦 DYNAMIC PAYLOAD: Wrap in the dashboard-expected JSON schema.
-            // 🎯 THE CHEAT CODE: Extract the rrweb event from the payload.
-            guard case .rrwebEvent(let event) = frame.payload else { return }
-            
-            let dateStr = self.isoFormatter.string(from: frame.timestamp)
-            
-            // 🎯 SUPPORT MULTI-EVENT PAYLOADS: If the engine sent a batch of events, unpack them.
             let chunkEvents: [[String: Any]]
-            if let nestedEvents = event["events"] as? [[String: Any]] {
-                chunkEvents = nestedEvents
-            } else {
-                chunkEvents = [event]
+            let dateStr = self.isoFormatter.string(from: frame.timestamp)
+            let timestampMs = Int64(frame.timestamp.timeIntervalSince1970 * 1000)
+
+            switch frame.payload {
+            case .rrwebEvent(let event):
+                // 🎯 SUPPORT MULTI-EVENT PAYLOADS: If the engine sent a batch of events, unpack them.
+                if let nestedEvents = event["events"] as? [[String: Any]] {
+                    chunkEvents = nestedEvents
+                } else {
+                    chunkEvents = [event]
+                }
+                
+            case .wireframe(let data):
+                // Phase 28: High-Fidelity Wireframe
+                // 1. Decode the node tree (iosRoot)
+                guard let iosRoot = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self.logger.warn("❌ Failed to decode wireframe data")
+                    return
+                }
+                
+                // 2. Wrap in rrweb Document structure (id 1=Doc, 2=HTML, 3=Body)
+                let rootNode: [String: Any] = [
+                    "id": 1, "type": 0, "childNodes": [[
+                        "id": 2, "type": 2, "tagName": "html", "attributes": ["lang": "en"], "childNodes": [[
+                            "id": 3, "type": 2, "tagName": "body", "attributes": ["style": "margin: 0; padding: 0; background: #000; "], "childNodes": [iosRoot]
+                        ]]
+                    ]]
+                ]
+                
+                // 3. Build Meta (4) & FullSnapshot (2) events
+                let metaEvent: [String: Any] = [
+                    "type": 4,
+                    "timestamp": timestampMs,
+                    "data": [
+                        "href": "ios-app://\(Bundle.main.bundleIdentifier ?? "sankofa")",
+                        "width": Int(UIScreen.main.bounds.width),
+                        "height": Int(UIScreen.main.bounds.height)
+                    ]
+                ]
+                
+                let snapshotEvent: [String: Any] = [
+                    "type": 2,
+                    "timestamp": timestampMs + 1,
+                    "data": [
+                        "node": rootNode,
+                        "initialOffset": ["left": 0, "top": 0]
+                    ]
+                ]
+                
+                chunkEvents = [metaEvent, snapshotEvent]
             }
 
             var envelope: [String: Any] = [
@@ -61,6 +101,7 @@ final class SankofaReplayUploader {
                 "event_count": chunkEvents.count,
                 "events": chunkEvents
             ]
+
 
             // Standard mobile metadata
             if let deviceContext {
