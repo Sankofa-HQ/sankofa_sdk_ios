@@ -39,18 +39,18 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
     private func collectNodes(from view: UIView, into output: inout [[String: Any]]) {
         let f = view.frame
         var node: [String: Any] = [
-            "t": typeName(of: view),
-            "x": safeDouble(f.origin.x),
-            "y": safeDouble(f.origin.y),
-            "w": safeDouble(f.size.width),
-            "h": safeDouble(f.size.height)
+            "t": self.typeName(of: view),
+            "x": self.safeDouble(f.origin.x),
+            "y": self.safeDouble(f.origin.y),
+            "w": self.safeDouble(f.size.width),
+            "h": self.safeDouble(f.size.height)
         ]
 
         // Capture text content — only from safe view types
         if let label = view as? UILabel {
-            node["v"] = sanitize(label.text)
+            node["v"] = self.sanitize(label.text)
         } else if let button = view as? UIButton {
-            node["v"] = sanitize(button.currentTitle)
+            node["v"] = self.sanitize(button.currentTitle)
         } else if view is UITextField || view is UITextView {
             node["v"] = "[masked]"
         }
@@ -59,7 +59,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 
         // Recurse into visible, non-transparent subviews
         for sub in view.subviews where !sub.isHidden && sub.alpha > 0.01 {
-            collectNodes(from: sub, into: &output)
+            self.collectNodes(from: sub, into: &output)
         }
     }
 
