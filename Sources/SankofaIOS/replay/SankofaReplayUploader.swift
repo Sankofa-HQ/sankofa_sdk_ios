@@ -61,8 +61,8 @@ final class SankofaReplayUploader {
                 // 2. Wrap in rrweb Document structure (id 1=Doc, 2=HTML, 3=Body)
                 let rootNode: [String: Any] = [
                     "id": 1, "type": 0, "childNodes": [[
-                        "id": 2, "type": 2, "tagName": "html", "attributes": ["lang": "en"], "childNodes": [[
-                            "id": 3, "type": 2, "tagName": "body", "attributes": ["style": "margin: 0; padding: 0; background: #000; "], "childNodes": [iosRoot]
+                        "id": 2, "type": 2, "tagName": "html", "attributes": ["lang": "en", "style": "width: 100%; height: 100%; margin: 0; padding: 0; "], "childNodes": [[
+                            "id": 3, "type": 2, "tagName": "body", "attributes": ["style": "margin: 0; padding: 0; background: #000; width: 100%; height: 100%; overflow: hidden; "], "childNodes": [iosRoot]
                         ]]
                     ]]
                 ]

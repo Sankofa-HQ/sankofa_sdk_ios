@@ -26,8 +26,8 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         }
 
         // 1. Build the High-Fidelity DOM Tree
-        nodeIdCounter = 1
-        let domTree = crawlForRRWeb(view: window, window: window)
+        nodeIdCounter = 4 // Reserve 1=Doc, 2=HTML, 3=Body
+        let domTree = crawlForRRWeb(view: window, window: window, depth: 0)
         
         // 2. Offload JSON encoding to background thread
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -49,14 +49,13 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
     // MARK: - rrweb Crawler (High-Fidelity CSS Bridge)
 
     @MainActor
-    private func crawlForRRWeb(view: UIView, window: UIWindow) -> RRWebNode {
+    private func crawlForRRWeb(view: UIView, window: UIWindow, depth: Int) -> RRWebNode {
         let currentId = nodeIdCounter
         nodeIdCounter += 1
         
-        // Convert local bounds to window-space coordinates
-        let frame = view.convert(view.bounds, to: window)
+        let frame = view.frame
         var children: [RRWebNode] = []
-        var css = buildBaseCSS(for: view, frame: frame)
+        var css = buildBaseCSS(for: view, frame: frame, depth: depth)
         
         var tagName = "div"
         var textContent: String? = nil
@@ -110,7 +109,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         // 2. Recursive Child Mapping (Ignore hidden to save CPU)
         for subview in view.subviews {
             if !subview.isHidden && subview.alpha > 0.01 {
-                children.append(crawlForRRWeb(view: subview, window: window))
+                children.append(crawlForRRWeb(view: subview, window: window, depth: depth + 1))
             }
         }
         
@@ -127,10 +126,11 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
 
     // MARK: - Advanced CSS Compilers
 
-    private func buildBaseCSS(for view: UIView, frame: CGRect) -> String {
-        var css = "position: absolute; box-sizing: border-box; "
+    private func buildBaseCSS(for view: UIView, frame: CGRect, depth: Int) -> String {
+        var css = "position: absolute; box-sizing: border-box; pointer-events: none; "
         css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
         css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
+        css += "z-index: \(depth * 10); "
         
         // Shadows (Phase 28)
         if view.layer.shadowOpacity > 0 {
@@ -156,6 +156,10 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         
         if !hasGradient, let bgColor = view.backgroundColor?.toHexString(), bgColor != "transparent" {
             css += "background-color: \(bgColor); "
+        } else if view is UIWindow {
+            // Default iOS system backgrounds for windows if not set
+            let isDark = view.traitCollection.userInterfaceStyle == .dark
+            css += "background-color: \(isDark ? "#000000" : "#FFFFFF"); "
         }
         
         if view.layer.cornerRadius > 0 {
