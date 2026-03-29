@@ -117,14 +117,30 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             }
             
         } else if let imageView = view as? UIImageView, let image = imageView.image {
-            // TINTED SF SYMBOLS & IMAGES -> Base64 Data URI
+            // IMAGES & SF SYMBOLS -> Base64 PNG
             tagName = "img"
-            let tinted = image.withTintColor(imageView.tintColor ?? .black)
-            // Using jpegData with small compression to keep frame payload tiny
-            if let data = tinted.jpegData(compressionQuality: 0.1) {
-                attributes["src"] = "data:image/jpeg;base64,\(data.base64EncodedString())"
+            var drawImage = image
+            if image.renderingMode == .alwaysTemplate, let tint = imageView.tintColor {
+                drawImage = image.withTintColor(tint)
+            }
+            
+            // Shrink heavily to prevent JSON bloat and UI thread lag
+            let maxDim: CGFloat = 32.0
+            var newSize = drawImage.size
+            if newSize.width > maxDim || newSize.height > maxDim {
+                let ratio = min(maxDim / newSize.width, maxDim / newSize.height)
+                newSize = CGSize(width: newSize.width * ratio, height: newSize.height * ratio)
+            }
+            
+            // UIGraphicsImageRenderer is optimized and fast, and pngData() preserves transparency (unlike JPEG)
+            let renderer = UIGraphicsImageRenderer(size: newSize)
+            let resized = renderer.image { _ in drawImage.draw(in: CGRect(origin: .zero, size: newSize)) }
+            
+            if let data = resized.pngData() {
+                attributes["src"] = "data:image/png;base64,\(data.base64EncodedString())"
             }
             css += "object-fit: contain; "
+
             
         } else {
             // SWIFTUI TEXT EXTRACTION (Phase 28 Hack)
