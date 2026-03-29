@@ -153,7 +153,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             children.append(textNode)
         }
         
-        return RRWebNode(id: currentId, type: 2, tagName: tagName, attributes: attributes, childNodes: children.isEmpty ? nil : children, textContent: nil)
+        return RRWebNode(id: currentId, type: 2, tagName: tagName, attributes: attributes, childNodes: children, textContent: nil)
     }
 
     // MARK: - Advanced CSS Compilers
