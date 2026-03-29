@@ -15,6 +15,21 @@ extension UIColor {
                       Int(ciColor.blue * 255))
     }
 
+    /// Resolves an iOS dynamic color (like .label) against a trait collection and converts it directly to a web CSS rgba() string.
+    func resolvedCSS(with traitCollection: UITraitCollection) -> String {
+        let resolved = self.resolvedColor(with: traitCollection)
+        let ciColor = CIColor(color: resolved)
+        
+        let a = ciColor.alpha
+        if a == 0 { return "transparent" }
+        
+        // Using RGBA guarantees perfect translation across web browsers
+        return String(format: "rgba(%d, %d, %d, %.2f)", 
+                      Int(ciColor.red * 255), 
+                      Int(ciColor.green * 255), 
+                      Int(ciColor.blue * 255), 
+                      a)
+    }
 }
 
 extension CGColor {

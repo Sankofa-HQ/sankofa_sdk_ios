@@ -1,22 +1,15 @@
 import UIKit
 import SwiftUI
 
-/// High-Fidelity rrweb Replay Engine (Phase 28 — The High-Fidelity Compiler).
-///
-/// This engine acts as a real-time iOS-to-CSS compiler. It recursively traverses
-/// the live UIView hierarchy and transforms every view, label, and button into
-/// an rrweb-compliant DOM tree with pixel-perfect inline CSS.
 final class SankofaWireframeEngine: SankofaCaptureEngine {
     private let sessionId: String
     private let maskAllInputs: Bool
     private var nodeIdCounter = 1
 
-    init(sessionId: String, maskAllInputs: Bool = true) {
+    init(sessionId: String, maskAllInputs: Bool) {
         self.sessionId = sessionId
         self.maskAllInputs = maskAllInputs
     }
-
-    // MARK: - SankofaCaptureEngine
 
     @MainActor
     func captureFrame(completion: @escaping (SankofaFrame?) -> Void) {
@@ -25,15 +18,11 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             return
         }
 
-        // 1. Reset ID counter to 5 (We reserve 1-4 for the Document Root)
-        nodeIdCounter = 5
-        
-        // 2. Crawl the iOS UI to get your styled UIWindow <div>
+        nodeIdCounter = 5 // Reserve 1-4 for HTML root
         let windowNode = crawlForRRWeb(view: window, window: window, depth: 0)
         
-        // 3. THE FIX: Wrap it in a strict rrweb HTML Document skeleton
         let documentNode = RRWebNode(
-            id: 1, type: 0, tagName: nil, attributes: nil, // Type 0 = Document Root
+            id: 1, type: 0, tagName: nil, attributes: nil,
             childNodes: [
                 RRWebNode(
                     id: 2, type: 2, tagName: "html", attributes: [:],
@@ -41,74 +30,62 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
                         RRWebNode(id: 3, type: 2, tagName: "head", attributes: [:], childNodes: [], textContent: nil),
                         RRWebNode(
                             id: 4, type: 2, tagName: "body", 
-                            // Force the body to match the iPhone's exact screen dimensions so it doesn't collapse
-                            attributes: ["style": "margin: 0; padding: 0; width: \(window.bounds.width)px; height: \(window.bounds.height)px; background-color: #000000;"],
-                            childNodes: [windowNode],
-                            textContent: nil
+                            attributes: ["style": "margin: 0; padding: 0; width: \(window.bounds.width)px; height: \(window.bounds.height)px; background-color: \(window.backgroundColor?.resolvedCSS(with: window.traitCollection) ?? "#000000"); overflow: hidden; "],
+                            childNodes: [windowNode], textContent: nil
                         )
-                    ],
-                    textContent: nil
+                    ], textContent: nil
                 )
-            ],
-            textContent: nil
+            ], textContent: nil
         )
         
-        // 4. THE ENVELOPE: Package it as a FullSnapshot Event (Type 2)
-        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
         let rrwebEvent = RRWebEvent(
             type: 2,
             data: RRWebSnapshotData(node: documentNode, initialOffset: ["left": 0, "top": 0]),
-            timestamp: timestamp
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
         )
         
-        // 5. Encode and ship to SQLite
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            do {
-                let jsonData = try JSONEncoder().encode(rrwebEvent)
-                let frame = SankofaFrame(
-                    sessionId: self.sessionId,
-                    timestamp: Date(),
-                    payload: .wireframe(jsonData)
-                )
+            if let jsonData = try? JSONEncoder().encode(rrwebEvent) {
+                let frame = SankofaFrame(sessionId: self.sessionId, timestamp: Date(), payload: .wireframe(jsonData))
                 completion(frame)
-            } catch {
+            } else {
                 completion(nil)
             }
         }
     }
-
-    // MARK: - rrweb Crawler (High-Fidelity CSS Bridge)
 
     @MainActor
     private func crawlForRRWeb(view: UIView, window: UIWindow, depth: Int) -> RRWebNode {
         let currentId = nodeIdCounter
         nodeIdCounter += 1
         
+        // BUGFIX 1: Use local frame instead of converted absolute coordinates to prevent children flying off-screen.
         let frame = view.frame
         var children: [RRWebNode] = []
-        var css = buildBaseCSS(for: view, frame: frame, depth: depth)
+        var attributes: [String: String] = [:]
         
         var tagName = "div"
         var textContent: String? = nil
-        var attributes: [String: String] = [:]
+        var css = buildBaseCSS(for: view, frame: frame, traits: window.traitCollection, depth: depth)
         
-        // 1. Typography & UI Element Mapping
+        // 1. EXTRACT DATA: Text, Images, Inputs
         if let label = view as? UILabel {
-            textContent = label.text ?? label.attributedText?.string
-            css += typographyCSS(font: label.font, color: label.textColor, alignment: label.textAlignment)
+            textContent = label.text
+            css += typographyCSS(font: label.font, color: label.textColor, alignment: label.textAlignment, traits: window.traitCollection)
             
         } else if let button = view as? UIButton {
             tagName = "button"
-            textContent = button.currentTitle ?? button.titleLabel?.text ?? button.attributedTitle(for: .normal)?.string
-            css += typographyCSS(font: button.titleLabel?.font, color: button.titleLabel?.textColor, alignment: .center)
+            textContent = button.titleLabel?.text
+            css += typographyCSS(font: button.titleLabel?.font, color: button.titleLabel?.textColor, alignment: .center, traits: window.traitCollection)
             css += "border: none; outline: none; cursor: pointer; "
             
         } else if let textField = view as? UITextField {
             tagName = "input"
-            css += typographyCSS(font: textField.font, color: textField.textColor, alignment: textField.textAlignment)
-            css += "padding: 0 12px; outline: none; "
+            css += typographyCSS(font: textField.font, color: textField.textColor, alignment: textField.textAlignment, traits: window.traitCollection)
+            css += "padding: 0 12px; outline: none; box-sizing: border-box; "
             
+            // MASKING CONFIG: Only mask inputs if secure or if config demands it
             if maskAllInputs || textField.isSecureTextEntry {
                 attributes["type"] = "password"
                 attributes["value"] = "••••••••"
@@ -116,120 +93,87 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
                 attributes["value"] = textField.text ?? textField.placeholder ?? ""
             }
             
+        } else if let textView = view as? UITextView {
+            tagName = "textarea"
+            css += typographyCSS(font: textView.font, color: textView.textColor, alignment: textView.textAlignment, traits: window.traitCollection)
+            css += "padding: 8px; outline: none; box-sizing: border-box; resize: none; "
+            
+            if maskAllInputs || textView.isSecureTextEntry {
+                textContent = "••••••••"
+            } else {
+                textContent = textView.text
+            }
+            
         } else if let imageView = view as? UIImageView, let image = imageView.image {
-            // IMAGES & SF SYMBOLS -> Base64 PNG
             tagName = "img"
+            css += "object-fit: contain; "
+            
             var drawImage = image
             if image.renderingMode == .alwaysTemplate, let tint = imageView.tintColor {
                 drawImage = image.withTintColor(tint)
             }
-            
-            // Shrink heavily to prevent JSON bloat and UI thread lag
-            let maxDim: CGFloat = 32.0
-            var newSize = drawImage.size
-            if newSize.width > maxDim || newSize.height > maxDim {
-                let ratio = min(maxDim / newSize.width, maxDim / newSize.height)
-                newSize = CGSize(width: newSize.width * ratio, height: newSize.height * ratio)
+            // BUGFIX 2: Use PNG instead of JPEG to preserve alpha channel transparency for icons
+            if let base64 = fastEncodeImageToPNG(drawImage) {
+                attributes["src"] = "data:image/png;base64,\(base64)"
             }
-            
-            // UIGraphicsImageRenderer is optimized and fast, and pngData() preserves transparency (unlike JPEG)
-            let renderer = UIGraphicsImageRenderer(size: newSize)
-            let resized = renderer.image { _ in drawImage.draw(in: CGRect(origin: .zero, size: newSize)) }
-            
-            if let data = resized.pngData() {
-                attributes["src"] = "data:image/png;base64,\(data.base64EncodedString())"
-            }
-            css += "object-fit: contain; "
-
             
         } else {
-            // SWIFTUI TEXT EXTRACTION (Phase 28 Hack)
-            // If it's a generic UIView, use reflection/accessibility to see if it's hiding SwiftUI Text
-            if let swiftUIText = extractSwiftUIText(from: view) {
-                textContent = swiftUIText
-                css += "color: \(view.tintColor?.toHexString() ?? "#000"); font-family: -apple-system, system-ui; font-size: 15px; font-weight: 500; display: flex; align-items: center; "
+            // FAST SWIFTUI TEXT EXTRACTION: Replaces slow Mirror with instant Accessibility
+            if view.isAccessibilityElement, view.accessibilityTraits.contains(.staticText), let text = view.accessibilityLabel {
+                textContent = text
+                css += typographyCSS(font: nil, color: view.tintColor, alignment: .left, traits: window.traitCollection)
             }
         }
 
-        // Apply final compiled CSS
         attributes["style"] = css
         
-        // 2. Recursive Child Mapping (Ignore hidden to save CPU)
+        // 2. RECURSE CHILDREN (Skip hidden to save CPU)
         for subview in view.subviews {
-            if !subview.isHidden && subview.alpha > 0.01 {
+            if !subview.isHidden && subview.alpha > 0.05 {
                 children.append(crawlForRRWeb(view: subview, window: window, depth: depth + 1))
             }
         }
         
-        // 3. Attach text as RRWeb TextNode (Type 3)
-        if let text = textContent, !text.isEmpty {
-            let textNodeId = nodeIdCounter
+        // 3. ATTACH TEXT NODE (RRWeb strictly requires text as a child type: 3)
+        if let text = textContent, !text.isEmpty, tagName != "input" {
+            let textNode = RRWebNode(id: nodeIdCounter, type: 3, tagName: nil, attributes: nil, childNodes: nil, textContent: text)
             nodeIdCounter += 1
-            let textNode = RRWebNode(id: textNodeId, type: 3, tagName: nil, attributes: nil, childNodes: nil, textContent: text)
             children.append(textNode)
         }
         
+        // BUGFIX 3: Unconditionally pass `children` array so JSONEncoder serializes it into strict `[]` instead of omitting it (`nil`).
         return RRWebNode(id: currentId, type: 2, tagName: tagName, attributes: attributes, childNodes: children, textContent: nil)
     }
 
-    // MARK: - Advanced CSS Compilers
+    // MARK: - CSS & Optimization Helpers
 
-    private func buildBaseCSS(for view: UIView, frame: CGRect, depth: Int) -> String {
+    private func buildBaseCSS(for view: UIView, frame: CGRect, traits: UITraitCollection, depth: Int) -> String {
         var css = "position: absolute; box-sizing: border-box; pointer-events: none; "
-        css += "left: \(Int(frame.origin.x))px; top: \(Int(frame.origin.y))px; "
-        css += "width: \(Int(frame.width))px; height: \(Int(frame.height))px; "
+        css += "left: \(frame.origin.x)px; top: \(frame.origin.y)px; "
+        css += "width: \(frame.width)px; height: \(frame.height)px; "
         css += "z-index: \(depth * 10); "
         
-        // Shadows (Phase 28)
-        if view.layer.shadowOpacity > 0 {
-            let dx = view.layer.shadowOffset.width
-            let dy = view.layer.shadowOffset.height
-            let blur = view.layer.shadowRadius
-            let opacity = view.layer.shadowOpacity
-            css += "box-shadow: \(Int(dx))px \(Int(dy))px \(Int(blur))px rgba(0,0,0,\(opacity)); "
-        }
-        
-        // Gradients (Phase 28)
-        var hasGradient = false
-        if let sublayers = view.layer.sublayers {
-            for layer in sublayers {
-                if let grad = layer as? CAGradientLayer, let colors = grad.colors as? [CGColor] {
-                    let colorStrings = colors.map { $0.toHexString() }.joined(separator: ", ")
-                    css += "background: linear-gradient(to bottom right, \(colorStrings)); "
-                    hasGradient = true
-                    break
-                }
-            }
-        }
-        
-        if !hasGradient, let bgColor = view.backgroundColor?.toHexString(), bgColor != "transparent" {
-            css += "background-color: \(bgColor); "
-        } else if view is UIWindow {
-            // Default iOS system backgrounds for windows if not set
-            let isDark = view.traitCollection.userInterfaceStyle == .dark
-            css += "background-color: \(isDark ? "#000000" : "#FFFFFF"); "
+        if let bgColor = view.backgroundColor, bgColor != .clear {
+            css += "background-color: \(bgColor.resolvedCSS(with: traits)); "
         }
         
         if view.layer.cornerRadius > 0 {
-            css += "border-radius: \(Int(view.layer.cornerRadius))px; "
-            if view.clipsToBounds { css += "overflow: hidden; " }
+            css += "border-radius: \(view.layer.cornerRadius)px; "
         }
-        
         if view.layer.borderWidth > 0 {
-            css += "border: \(Int(view.layer.borderWidth))px solid \(view.layer.borderColor?.toHexString() ?? "#000"); "
+            let borderColor = UIColor(cgColor: view.layer.borderColor ?? UIColor.clear.cgColor)
+            css += "border: \(view.layer.borderWidth)px solid \(borderColor.resolvedCSS(with: traits)); "
         }
-        
-        if view.alpha < 1.0 { css += "opacity: \(String(format: "%.2f", view.alpha)); " }
+        if view.alpha < 1.0 { css += "opacity: \(view.alpha); " }
+        if view.clipsToBounds { css += "overflow: hidden; " }
         
         return css
     }
 
-    private func typographyCSS(font: UIFont?, color: UIColor?, alignment: NSTextAlignment) -> String {
-        let f = font ?? UIFont.systemFont(ofSize: 14)
+    private func typographyCSS(font: UIFont?, color: UIColor?, alignment: NSTextAlignment, traits: UITraitCollection) -> String {
+        let f = font ?? UIFont.systemFont(ofSize: 15)
         let fontSize = f.pointSize
-        let hexColor = color?.toHexString() ?? "#000000"
-        
-        // Phase 28: Typography Mapping
+        let cssColor = (color ?? UIColor.label).resolvedCSS(with: traits)
         let isBold = f.fontDescriptor.symbolicTraits.contains(.traitBold)
         let weight = isBold ? "600" : "400"
         
@@ -237,23 +181,21 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         if alignment == .center { align = "center" }
         else if alignment == .right { align = "right" }
         
-        return "color: \(hexColor); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: \(Int(fontSize))px; font-weight: \(weight); letter-spacing: -0.3px; text-align: \(align); display: flex; align-items: center; justify-content: \(align == "center" ? "center" : align == "right" ? "flex-end" : "flex-start"); white-space: pre-wrap; "
+        return "color: \(cssColor); font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: \(fontSize)px; font-weight: \(weight); text-align: \(align); display: flex; align-items: center; justify-content: \(align == "center" ? "center" : align == "right" ? "flex-end" : "flex-start"); white-space: pre-wrap; word-break: break-word; "
     }
 
-    private func extractSwiftUIText(from view: UIView) -> String? {
-        // Fallback 1: SwiftUI automatically bridges Text() to accessibilityLabel
-        if let accLabel = view.accessibilityLabel, !accLabel.isEmpty, view.accessibilityTraits.contains(.staticText) {
-            return accLabel
-        }
+    // Prevents UI Lag by forcing images down to a tiny, web-friendly thumbnail
+    private func fastEncodeImageToPNG(_ image: UIImage) -> String? {
+        let maxDim: CGFloat = 64.0 // Super fast constraint
+        let size = image.size
+        guard size.width > 0 && size.height > 0 else { return nil }
         
-        // Fallback 2: The Phase 28 Mirror Hack
-        let mirror = Mirror(reflecting: view)
-        for child in mirror.children {
-            if let label = child.label, label.lowercased().contains("text"), let textValue = child.value as? String {
-                return textValue
-            }
-        }
-        return nil
+        let scale = min(maxDim / size.width, maxDim / size.height, 1.0)
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
+        
+        return resized.pngData()?.base64EncodedString()
     }
 }
-
