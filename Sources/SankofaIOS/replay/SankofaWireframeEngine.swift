@@ -8,6 +8,7 @@ import UIKit
 final class SankofaWireframeEngine: SankofaCaptureEngine {
 
     private let sessionId: String
+    private var lastTreeSignature: String = ""
 
     init(sessionId: String) {
         self.sessionId = sessionId
@@ -26,6 +27,15 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         var flatNodes: [[String: Any]] = []
         self.collectNodes(from: window, in: window, into: &flatNodes)
 
+        // 💨 Idle Detection: Compare signature to avoid flooding identical frames
+        let currentSignature = self.generateSignature(for: flatNodes)
+        guard currentSignature != lastTreeSignature else {
+            // Screen is static; skip this frame to save bandwidth/battery
+            completion(nil)
+            return
+        }
+        lastTreeSignature = currentSignature
+
         // Payload: pass the flat nodes array directly — no JSON roundtrip needed.
         let frame = SankofaFrame(
             sessionId: sessionId,
@@ -33,6 +43,18 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             payload: .wireframeNodes(flatNodes)
         )
         completion(frame)
+    }
+
+    private func generateSignature(for nodes: [[String: Any]]) -> String {
+        // A simple signature: join the type, x, y, and value of every node.
+        // This is much faster than full JSON serialization but catches almost all UI changes.
+        return nodes.map { node in
+            let t = node["t"] as? String ?? ""
+            let x = node["x"] as? Double ?? 0
+            let y = node["y"] as? Double ?? 0
+            let v = node["v"] as? String ?? ""
+            return "\(t)\(Int(x))\(Int(y))\(v)"
+        }.joined(separator: "|")
     }
 
     // MARK: - Flat Node Collection
@@ -52,7 +74,7 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             "h": self.safeDouble(f.size.height)
         ]
 
-        // 🎨 VISUALS: Extract background color as hex for web reconstruction
+        // 🎨 VISUALS: Richer properties for better reconstruction
         if let bgColor = view.backgroundColor {
             node["bg"] = bgColor.sankofa_toHexString()
         }
@@ -61,13 +83,50 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
             node["a"] = self.safeDouble(view.alpha)
         }
 
-        // 📝 TEXT: Only from safe, non-sensitive view types
+        if view.layer.cornerRadius > 0 {
+            node["cr"] = self.safeDouble(view.layer.cornerRadius)
+        }
+
+        if view.layer.borderWidth > 0 {
+            node["bw"] = self.safeDouble(view.layer.borderWidth)
+            if let borderColor = view.layer.borderColor {
+                node["bc"] = UIColor(cgColor: borderColor).sankofa_toHexString()
+            }
+        }
+
+        // 📝 TEXT & IMAGES: Handle more types, including SwiftUI and Navigation items
         if let label = view as? UILabel {
             node["v"] = self.sanitize(label.text)
+            node["fs"] = self.safeDouble(label.font.pointSize)
+            node["fc"] = label.textColor.sankofa_toHexString()
         } else if let button = view as? UIButton {
             node["v"] = self.sanitize(button.currentTitle)
+            if let label = button.titleLabel {
+                node["fs"] = self.safeDouble(label.font.pointSize)
+                if let color = button.titleColor(for: .normal) {
+                    node["fc"] = color.sankofa_toHexString()
+                }
+            }
         } else if view is UITextField || view is UITextView {
             node["v"] = "[masked]"
+        } else if let imageView = view as? UIImageView {
+            // Use accessibility label as a fallback to describe images in wireframes
+            if let alt = imageView.accessibilityLabel {
+                node["v"] = self.sanitize(alt)
+                node["v_type"] = "alt"
+            }
+        } else if let navBar = view as? UINavigationBar {
+            node["v"] = self.sanitize(navBar.topItem?.title)
+        } else if let seg = view as? UISegmentedControl {
+            let idx = seg.selectedSegmentIndex
+            if idx >= 0 {
+                node["v"] = self.sanitize(seg.titleForSegment(at: idx))
+            }
+        } else if String(describing: type(of: view)).contains("UIHostingView") {
+            // 🎯 SWIFTUI FIX: Extract text from SwiftUI hosting views by searching sub-labels
+            if let swiftUIText = self.findSwiftUIText(in: view) {
+                node["v"] = swiftUIText
+            }
         }
 
         output.append(node)
@@ -76,6 +135,20 @@ final class SankofaWireframeEngine: SankofaCaptureEngine {
         for sub in view.subviews {
             self.collectNodes(from: sub, in: window, into: &output)
         }
+    }
+
+    /// Recursively search for a label inside a view (used for SwiftUI text extraction).
+    private func findSwiftUIText(in view: UIView) -> String? {
+        if let label = view as? UILabel {
+            let text = self.sanitize(label.text)
+            return text.isEmpty ? nil : text
+        }
+        for sub in view.subviews {
+            if let found = findSwiftUIText(in: sub) {
+                return found
+            }
+        }
+        return nil
     }
 
     // MARK: - Helpers

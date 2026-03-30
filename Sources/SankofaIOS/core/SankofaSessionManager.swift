@@ -17,6 +17,6 @@ final class SankofaSessionManager {
     }
 
     private static func generateSessionId() -> String {
-        "session_\(UUID().uuidString)"
+        "s_\(UUID().uuidString)"
     }
 }

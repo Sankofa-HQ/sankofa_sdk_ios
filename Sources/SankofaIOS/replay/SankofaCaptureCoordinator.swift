@@ -29,13 +29,11 @@ final class SankofaCaptureCoordinator {
     // MARK: - Scheduler
 
     private var displayLink: CADisplayLink?
-    private var frameCounter: Int = 0
-    private var skipFrames: Int = 0
+    private var lastCaptureTime: TimeInterval = 0
     
     // 🎯 SNIPER: CFRunLoopObserver for idle-state screenshot capture
     private var runLoopObserver: CFRunLoopObserver?
-    private var lastCaptureTime: TimeInterval = 0
-
+    
     // MARK: - Escalation
 
     private var escalationConfig: EscalationConfig?
@@ -53,14 +51,18 @@ final class SankofaCaptureCoordinator {
     // MARK: - Lifecycle
 
     func start(sessionId: String = "") {
-        self.sessionId = sessionId.isEmpty ? "session_\(UUID().uuidString)" : sessionId
-        wireframeEngine = SankofaWireframeEngine(sessionId: self.sessionId)
-        screenshotEngine = SankofaScreenshotEngine(sessionId: self.sessionId, maskAllInputs: maskAllInputs)
+        // Idempotency: Don't start twice if already running
+        guard displayLink == nil else { return }
+
+        if !sessionId.isEmpty {
+            self.sessionId = sessionId
+            wireframeEngine = SankofaWireframeEngine(sessionId: self.sessionId)
+            screenshotEngine = SankofaScreenshotEngine(sessionId: self.sessionId, maskAllInputs: maskAllInputs)
+        }
         
         currentEngine = (initialMode == .wireframe) ? wireframeEngine : screenshotEngine
-        skipFrames = max(0, Int(60.0 / targetFPS) - 1)
         
-        if let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) {
+        if touchInterceptor == nil, let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) {
             let interceptor = SankofaTouchInterceptor(target: nil, action: nil)
             window.addGestureRecognizer(interceptor)
             self.touchInterceptor = interceptor
@@ -84,17 +86,17 @@ final class SankofaCaptureCoordinator {
         escalationTimer?.invalidate()
         escalationTimer = nil
     }
-
-    // MARK: - Capture Tick
+     // MARK: - Capture Tick
 
     @objc internal func tick() {
+        // 💨 Throttling Fix: Use CACurrentMediaTime() for precise 2 FPS (even on 120Hz displays)
+        let now = CACurrentMediaTime()
+        guard now - lastCaptureTime >= (1.0 / targetFPS) else { return }
+        lastCaptureTime = now
+
         // 💨 PERFORMANCE: If we are in screenshot mode, the Sniper (RunLoopObserver) 
         // handles the capture. We don't want the CADisplayLink to fire as well.
         guard !(currentEngine is SankofaScreenshotEngine) else { return }
-
-        frameCounter += 1
-        guard frameCounter > skipFrames else { return }
-        frameCounter = 0
 
         let interactions = touchInterceptor?.flush() ?? []
         let context = deviceInfo.deviceContext()
@@ -104,8 +106,7 @@ final class SankofaCaptureCoordinator {
             self.uploader.upload(frame, deviceContext: context, interactions: interactions)
         }
     }
-
-    // MARK: - Idle Sniper (PostHog Method)
+     // MARK: - Idle Sniper (PostHog Method)
 
     private func startIdleCapture() {
         stopIdleCapture()

@@ -107,8 +107,10 @@ final class SankofaQueueManager {
 
     /// Dequeue the oldest `limit` events, execute `handler`, then delete
     /// successful ones. Failed events remain in the queue for the next flush.
-    func flush(limit: Int, handler: ([QueuedEvent]) async -> Set<Int64>) async {
-        guard count() > 0 else { return }
+    /// Returns the number of events successfully deleted.
+    @discardableResult
+    func flush(limit: Int, handler: ([QueuedEvent]) async -> Set<Int64>) async -> Int {
+        guard count() > 0 else { return 0 }
 
         let batch: [QueuedEvent]
         do {
@@ -121,7 +123,7 @@ final class SankofaQueueManager {
             }
         } catch {
             logger.warn("❌ Failed to read queue: \(error)")
-            return
+            return 0
         }
 
         let successIds = await handler(batch)
@@ -135,8 +137,10 @@ final class SankofaQueueManager {
                 }
             }
             logger.log("🗑 Removed \(successIds.count)/\(batch.count) events from queue")
+            return successIds.count
         } catch {
             logger.warn("❌ Failed to delete flushed events: \(error)")
+            return 0
         }
     }
 }

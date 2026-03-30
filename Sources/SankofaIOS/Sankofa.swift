@@ -71,15 +71,6 @@ public final class Sankofa: NSObject {
         )
         self.flushManager = fm
 
-        let observer = SankofaLifecycleObserver(
-            flushManager: fm,
-            trackLifecycle: config.trackLifecycleEvents,
-            onLifecycleEvent: { [weak self] event in
-                self?.track(event)
-            }
-        )
-        self.lifecycleObserver = observer
-
         let coordinator = SankofaCaptureCoordinator(
             mode: config.captureMode,
             maskAllInputs: config.maskAllInputs,
@@ -91,9 +82,20 @@ public final class Sankofa: NSObject {
         coordinator.uploader.setDistinctId(identity.distinctId)
         self.captureCoordinator = coordinator
 
+        let observer = SankofaLifecycleObserver(
+            flushManager: fm,
+            captureCoordinator: coordinator,
+            trackLifecycle: config.trackLifecycleEvents,
+            onLifecycleEvent: { [weak self] event in
+                self?.track(event)
+            }
+        )
+        self.lifecycleObserver = observer
+
         logger.log("✅ [v2] Sankofa initialized (endpoint: \(config.endpoint))")
 
         observer.start()
+        fm.start() // BUG 3 FIX: Start timer immediately in case app is already active
 
         if config.recordSessions {
             coordinator.configure(escalation: EscalationConfig(

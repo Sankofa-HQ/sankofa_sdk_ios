@@ -8,6 +8,7 @@ import UIKit
 final class SankofaLifecycleObserver {
 
     private let flushManager: SankofaFlushManager
+    private let captureCoordinator: SankofaCaptureCoordinator
     private let trackLifecycle: Bool
     private let onLifecycleEvent: (String) -> Void
 
@@ -15,10 +16,12 @@ final class SankofaLifecycleObserver {
 
     init(
         flushManager: SankofaFlushManager,
+        captureCoordinator: SankofaCaptureCoordinator,
         trackLifecycle: Bool,
         onLifecycleEvent: @escaping (String) -> Void
     ) {
         self.flushManager = flushManager
+        self.captureCoordinator = captureCoordinator
         self.trackLifecycle = trackLifecycle
         self.onLifecycleEvent = onLifecycleEvent
     }
@@ -34,6 +37,7 @@ final class SankofaLifecycleObserver {
         ) { [weak self] _ in
             guard let self else { return }
             self.flushManager.start()
+            self.captureCoordinator.start() // Resume replay capture
             if self.trackLifecycle { self.onLifecycleEvent("$app_opened") }
         })
 
@@ -45,6 +49,7 @@ final class SankofaLifecycleObserver {
         ) { [weak self] _ in
             guard let self else { return }
             self.flushManager.stop()
+            self.captureCoordinator.stop() // Pause replay capture (CRITICAL FIX)
             self.flushManager.flush()
             if self.trackLifecycle { self.onLifecycleEvent("$app_backgrounded") }
         })
