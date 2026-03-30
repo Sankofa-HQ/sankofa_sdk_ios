@@ -58,7 +58,7 @@ public final class SankofaConfig: NSObject {
         recordSessions: Bool = true,
         maskAllInputs: Bool = true,
         captureMode: SankofaCaptureMode = .wireframe,
-        highFidelityTriggers: [String] = ["Checkout Started", "Purchase Completed"],
+        highFidelityTriggers: [String] = [],
         highFidelityDuration: TimeInterval = 30
     ) {
         self.endpoint = endpoint

@@ -124,7 +124,7 @@ public final class Sankofa: NSObject {
                 "$session_id": sessionManager.sessionId
             ],
             "default_properties": defaultProperties(),
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "timestamp": Sankofa.iso8601Formatter.string(from: Date()),
             "message_id": UUID().uuidString.lowercased(),
             "lib_version": "ios-1.0.0"
         ]
@@ -146,7 +146,7 @@ public final class Sankofa: NSObject {
             "distinct_id": identity.distinctId,
             "properties": eventProps,
             "default_properties": defaultProperties(),
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "timestamp": Sankofa.iso8601Formatter.string(from: Date()),
             "message_id": UUID().uuidString.lowercased(),
             "lib_version": "ios-1.0.0"
         ]
@@ -173,7 +173,7 @@ public final class Sankofa: NSObject {
             "distinct_id": identity.distinctId,
             "properties": personProps,
             "default_properties": defaultProperties(),
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "timestamp": Sankofa.iso8601Formatter.string(from: Date()),
             "message_id": UUID().uuidString.lowercased(),
             "lib_version": "ios-1.0.0"
         ]
@@ -209,8 +209,11 @@ public final class Sankofa: NSObject {
     }
 
     private func assertInitialized(file: StaticString = #file, line: UInt = #line) {
-        if !isInitialized {
-            logger.warn("⚠️ Sankofa.initialize() not called before \(file):\(line)")
-        }
     }
+
+    private static let iso8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 }
