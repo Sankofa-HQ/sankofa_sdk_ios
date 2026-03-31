@@ -82,9 +82,10 @@ final class SankofaReplayUploader {
                 envelope["interactions"] = interactions.map { i in
                     let type: Int
                     switch i.type {
-                    case "pointer_down": type = 2
-                    case "pointer_up": type = 1
-                    default: type = 0 // pointer_move
+                    case "pointer_up": type = 0      // 0 = MouseUp (rrweb)
+                    case "pointer_down": type = 1    // 1 = MouseDown (rrweb)
+                    case "pointer_move": type = 4    // 4 = MouseMove (rrweb)
+                    default: type = 0
                     }
                     
                     return [

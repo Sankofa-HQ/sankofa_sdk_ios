@@ -94,6 +94,12 @@ public final class Sankofa: NSObject {
 
         logger.log("✅ [v2] Sankofa initialized (endpoint: \(config.endpoint))")
 
+        if config.endpoint.contains("localhost") || config.endpoint.contains("127.0.0.1") {
+            #if !targetEnvironment(simulator)
+            logger.warn("⚠️ Using 'localhost' on a physical device will fail. Use your machine's local IP (e.g., http://192.168.1.10:8080) instead.")
+            #endif
+        }
+
         observer.start()
         fm.start() // BUG 3 FIX: Start timer immediately in case app is already active
 

@@ -43,7 +43,19 @@ final class SankofaFlushManager {
         self.logger = logger
 
         networkMonitor.pathUpdateHandler = { [weak self] path in
-            self?.isConnected = (path.status == .satisfied)
+            let status = path.status == .satisfied
+            let interface = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ", ")
+            
+            #if targetEnvironment(simulator)
+            //  SIMULATOR FIX: Always report connected in simulator to avoid NWPathMonitor flakiness
+            self?.isConnected = true
+            #else
+            self?.isConnected = status
+            #endif
+            
+            if !status {
+                self?.logger.log("📡 Network status changed: \(path.status) (Interfaces: \(interface))")
+            }
         }
         networkMonitor.start(queue: DispatchQueue(label: "dev.sankofa.network.monitor"))
     }
@@ -68,10 +80,12 @@ final class SankofaFlushManager {
 
     func flush() {
         // KILLER 3 (Battery Guard)
+        #if !targetEnvironment(simulator)
         guard isConnected else {
             logger.log("📡 Offline. Skipping flush to save battery.")
             return
         }
+        #endif
 
         lock.lock()
         guard !isFlushing else { lock.unlock(); return }
