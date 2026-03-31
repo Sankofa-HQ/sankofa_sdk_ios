@@ -12,9 +12,7 @@ protocol SankofaCaptureEngine: AnyObject {
 /// A captured frame ready for upload.
 struct SankofaFrame {
     enum Payload {
-        /// Wireframe engine output: lightweight JSON view-tree (pre-flattened).
-        case wireframeNodes([[String: Any]])
-        /// Screenshot engine output: JPEG image data, privacy-masked in memory.
+        /// Screenshot engine output: WebP or JPEG image data, privacy-masked in memory.
         case screenshot(Data)
     }
 

@@ -41,13 +41,14 @@ public final class Sankofa: NSObject {
     private var deviceInfo = SankofaDeviceInfo()
     private var queueManager: SankofaQueueManager?
     private var flushManager: SankofaFlushManager?
-    private var lifecycleObserver: SankofaLifecycleObserver?
-    private var captureCoordinator: SankofaCaptureCoordinator?
+    @MainActor private var lifecycleObserver: SankofaLifecycleObserver?
+    @MainActor private var captureCoordinator: SankofaCaptureCoordinator?
 
     // MARK: - Public API
 
     /// Initialise the SDK. Call this once at app start.
     @objc
+    @MainActor
     public func initialize(apiKey: String, config: SankofaConfig = SankofaConfig()) {
         guard !isInitialized else {
             logger.warn("Sankofa already initialized; ignoring duplicate call.")
@@ -72,7 +73,6 @@ public final class Sankofa: NSObject {
         self.flushManager = fm
 
         let coordinator = SankofaCaptureCoordinator(
-            mode: config.captureMode,
             maskAllInputs: config.maskAllInputs,
             captureScale: config.captureScale,
             uploader: SankofaReplayUploader(
@@ -102,19 +102,16 @@ public final class Sankofa: NSObject {
         }
 
         observer.start()
-        fm.start() // BUG 3 FIX: Start timer immediately in case app is already active
+        fm.start()
 
         if config.recordSessions {
-            coordinator.configure(escalation: EscalationConfig(
-                triggers: Set(config.highFidelityTriggers),
-                highFidelityDuration: config.highFidelityDuration
-            ))
             coordinator.start(sessionId: sessionManager.sessionId)
         }
     }
 
     /// Identify a user by their unique ID. Merges anonymous history into the profile.
     @objc
+    @MainActor
     public func identify(userId: String) {
         assertInitialized()
         identity.identify(userId: userId)
@@ -160,9 +157,6 @@ public final class Sankofa: NSObject {
 
         logger.log("📈 [v2] track → \(event)")
         queueManager?.enqueue(payload)
-
-        // Let the coordinator check escalation triggers.
-        captureCoordinator?.onEvent(event)
     }
 
     /// Set profile attributes for the current user.

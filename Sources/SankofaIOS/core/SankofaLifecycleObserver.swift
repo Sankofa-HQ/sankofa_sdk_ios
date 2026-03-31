@@ -5,6 +5,7 @@ import UIKit
 ///
 /// Mirrors `SankofaLifecycleObserver` in the Flutter SDK.
 /// Subscribes via `NotificationCenter` — no Objective-C swizzling.
+@MainActor
 final class SankofaLifecycleObserver {
 
     private let flushManager: SankofaFlushManager

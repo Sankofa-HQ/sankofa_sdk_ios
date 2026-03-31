@@ -36,16 +36,6 @@ public final class SankofaConfig: NSObject {
     /// `view.sankofaMask = true`.
     @objc public var maskAllInputs: Bool
 
-    /// Replay capture mode. Defaults to `.wireframe` (zero-image, privacy-safe).
-    @objc public var captureMode: SankofaCaptureMode
-
-    /// Events that trigger a temporary switch to high-fidelity (screenshot) mode.
-    /// E.g. ["Checkout Started", "Purchase Completed"]
-    @objc public var highFidelityTriggers: [String]
-
-    /// Duration (in seconds) to stay in screenshot mode after a trigger event.
-    @objc public var highFidelityDuration: TimeInterval
-
     /// Scale factor for screenshot engine to reduce resolution/payload size. Defaults to 0.5.
     @objc public var captureScale: CGFloat
 
@@ -60,10 +50,7 @@ public final class SankofaConfig: NSObject {
         batchSize: Int = 50,
         recordSessions: Bool = true,
         maskAllInputs: Bool = true,
-        captureScale: CGFloat = 0.5,
-        // captureMode: SankofaCaptureMode = .screenshot,
-        // highFidelityTriggers: [String] = [],
-        // highFidelityDuration: TimeInterval = 30
+        captureScale: CGFloat = 0.35,
     ) {
         self.endpoint = endpoint
         self.debug = debug
@@ -73,21 +60,7 @@ public final class SankofaConfig: NSObject {
         self.recordSessions = recordSessions
         self.maskAllInputs = maskAllInputs
         self.captureScale = captureScale
-        self.captureMode = .screenshot
-        self.highFidelityTriggers = []
-        self.highFidelityDuration = 30
         super.init()
     }
 }
 
-/// Capture mode for session replay.
-@objc(SankofaSankofaCaptureMode)
-public enum SankofaCaptureMode: Int {
-    /// Reconstructs the UI as a lightweight JSON view-tree.
-    /// Zero-image, privacy-safe, low bandwidth. **Default.**
-    case wireframe = 0
-
-    /// Captures pixel-perfect screenshots using Ghost Masking (CoreGraphics
-    /// in-memory only — the live screen is never modified).
-    case screenshot = 1
-}

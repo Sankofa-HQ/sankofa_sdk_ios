@@ -1,4 +1,6 @@
 import UIKit
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Screenshot engine using Ghost Masking — CoreGraphics in-memory rendering.
 ///
@@ -15,8 +17,12 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
     private let sessionId: String
     private let maskAllInputs: Bool
     private let captureScale: CGFloat
+    
+    // 🚀 Anti-Flood: Cache the last frame to prevent uploading identical static screens
+    private var lastImageData: Data?
+    private let lock = NSLock()
 
-    init(sessionId: String, maskAllInputs: Bool, captureScale: CGFloat = 0.5) {
+    init(sessionId: String, maskAllInputs: Bool, captureScale: CGFloat = 0.35) {
         self.sessionId = sessionId
         self.maskAllInputs = maskAllInputs
         self.captureScale = captureScale
@@ -24,7 +30,6 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
 
     // MARK: - SankofaCaptureEngine
 
-    // KILLER 4 (Concurrency): @MainActor ensures this ONLY runs on the UI thread
     @MainActor
     func captureFrame(completion: @escaping (SankofaFrame?) -> Void) {
         guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
@@ -32,7 +37,6 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
             return
         }
 
-        // 1. Collect rects and draw the image on the Main Thread (Very Fast)
         let sensitiveRects = collectSensitiveRects(in: window)
 
         let format = UIGraphicsImageRendererFormat()
@@ -40,47 +44,64 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
         let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
 
         let maskedImage = renderer.image { ctx in
-            // Draw the current window into our invisible canvas.
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
-
-            // Paint solid black over every sensitive coordinate.
             ctx.cgContext.setFillColor(UIColor.black.cgColor)
             for rect in sensitiveRects {
                 ctx.cgContext.fill(rect)
             }
         }
 
-        // 2. FIRE AND FORGET: Push compression to background and DO NOT WAIT.
-        // This ensures the Main UI thread is free to render the next frame instantly.
-        DispatchQueue.global(qos: .background).async { [weak self] in
+        // 🚀 Compress on background thread
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            let jpegData = maskedImage.jpegData(compressionQuality: 0.3)
+            // 🚀 FAST WEBP ENCODING via Apple's ImageIO
+            var finalData: Data? = nil
             
-            guard let data = jpegData else {
+            if let cgImage = maskedImage.cgImage {
+                let mutableData = NSMutableData()
+                if let destination = CGImageDestinationCreateWithData(mutableData, UTType.webP.identifier as CFString, 1, nil) {
+                    let options: [CFString: Any] = [
+                        kCGImageDestinationLossyCompressionQuality: 0.3
+                    ]
+                    CGImageDestinationAddImage(destination, cgImage, options as CFDictionary)
+                    if CGImageDestinationFinalize(destination) {
+                        finalData = mutableData as Data
+                    }
+                }
+            }
+            
+            // Fallback to JPEG if WebP encoding fails on older hardware
+            if finalData == nil {
+                finalData = maskedImage.jpegData(compressionQuality: 0.3)
+            }
+            
+            guard let data = finalData else {
                 completion(nil)
                 return
             }
+            
+            // 🚀 ANTI-FLOOD CHECK: Drop identical frames
+            self.lock.lock()
+            if data == self.lastImageData {
+                self.lock.unlock()
+                completion(nil)
+                return
+            }
+            self.lastImageData = data
+            self.lock.unlock()
 
             let frame = SankofaFrame(
                 sessionId: self.sessionId,
                 timestamp: Date(),
                 payload: .screenshot(data)
             )
-            
-            // 3. Return the finished frame via callback
             completion(frame)
         }
     }
 
     // MARK: - Sensitive Rect Collection
 
-    /// Recursively walks the view tree and collects the global `CGRect` for
-    /// every sensitive view (`UITextField`, `UITextView`, `UISwitch`, and any
-    /// view tagged with `sankofaMask = true`).
-    ///
-    /// Coordinates are converted from local view space to window space so they
-    /// align precisely with the rendered `window.drawHierarchy` output.
     private func collectSensitiveRects(in window: UIWindow) -> [CGRect] {
         var rects: [CGRect] = []
         collectRectsRecursively(view: window, window: window, rects: &rects)
@@ -91,19 +112,15 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
         let isSensitive: Bool = {
             if maskAllInputs && (view is UITextField || view is UITextView) { return true }
             if view is UISwitch { return true }
-            // Respect manual mask tagging (UIView extension or tag)
             if (view.layer.value(forKey: SankofaMaskKey) as? Bool) == true { return true }
             if (view.tag == SankofaMaskTagValue) { return true }
             return false
         }()
 
         if isSensitive {
-            let globalRect = view.convert(view.bounds, to: window)
-            rects.append(globalRect)
-            // No need to recurse into masked views.
+            rects.append(view.convert(view.bounds, to: window))
             return
         }
-
         for subview in view.subviews {
             collectRectsRecursively(view: subview, window: window, rects: &rects)
         }

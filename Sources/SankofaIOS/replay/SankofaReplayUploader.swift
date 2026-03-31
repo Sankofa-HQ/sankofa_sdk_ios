@@ -34,35 +34,11 @@ final class SankofaReplayUploader {
             let latestInteraction = interactions.last
             
             // 📦 DYNAMIC PAYLOAD: Wrap in the dashboard-expected JSON schema.
-            var envelope: [String: Any] = [:]
-            let replayMode: String
-            
+            var envelope: [String: Any]
+            let replayMode = "screenshot"
+
             switch frame.payload {
-            case .wireframeNodes(let nodes):
-                replayMode = "wireframe"
-                
-                // Build the wireframe event exactly as the dashboard expects.
-                var wireframeEvent: [String: Any] = [
-                    "type": "ui_snapshot",
-                    "time_offset_ms": 0,
-                    "nodes": nodes
-                ]
-                
-                // If there's an active interaction, embed its coords inside the event
-                if let interact = latestInteraction {
-                    wireframeEvent["x"] = interact.x
-                    wireframeEvent["y"] = interact.y
-                }
-
-                let chunkStartMs = Int64(frame.timestamp.timeIntervalSince1970 * 1000)
-                envelope = [
-                    "mode": "wireframe",
-                    "chunk_start_timestamp": chunkStartMs,
-                    "events": [wireframeEvent]
-                ]
-
             case .screenshot(let data):
-                replayMode = "screenshot"
                 envelope = [
                     "mode": "screenshot",
                     "frames": [[

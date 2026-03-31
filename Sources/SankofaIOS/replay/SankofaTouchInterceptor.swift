@@ -64,6 +64,10 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
 
     // Allow simultaneous recognition with ALL other gesture recognizers
     // so we never block the app's own gestures.
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return false
+    }
+
     override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
         return false
     }
