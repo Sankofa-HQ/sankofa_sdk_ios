@@ -5,6 +5,12 @@ import UIKit.UIGestureRecognizerSubclass
 ///
 /// By using a `UIGestureRecognizer` attached to the key window with `cancelsTouchesInView = false`,
 /// we can observe all touch events without swizzling or interfering with the app's UI.
+///
+/// ## Critical Implementation Notes
+/// 1. We MUST transition `.state` through `.began → .changed → .ended` so the
+///    system doesn't cancel our recognizer when other gesture recognizers fire.
+/// 2. `cancelsTouchesInView`, `delaysTouchesBegan`, and `delaysTouchesEnded` are
+///    all set to `false` so the app's own gesture system is completely unaffected.
 final class SankofaTouchInterceptor: UIGestureRecognizer {
 
     struct Interaction {
@@ -19,7 +25,10 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
 
     override init(target: Any?, action: Selector?) {
         super.init(target: target, action: action)
+        // CRITICAL: All three must be false so we don't interfere with the host app
         self.cancelsTouchesInView = false
+        self.delaysTouchesBegan = false
+        self.delaysTouchesEnded = false
     }
 
     func flush() -> [Interaction] {
@@ -33,24 +42,34 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
     // MARK: - Touch Tracking
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesBegan(touches, with: event)
+        // CRITICAL: Transition to .began so the system doesn't cancel us
+        self.state = .began
         record(touches, type: "pointer_down")
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesMoved(touches, with: event)
-        // Optionally throttle move events if needed
+        self.state = .changed
         record(touches, type: "pointer_move")
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesEnded(touches, with: event)
+        self.state = .ended
         record(touches, type: "pointer_up")
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesCancelled(touches, with: event)
+        self.state = .cancelled
         record(touches, type: "pointer_up")
+    }
+
+    // Allow simultaneous recognition with ALL other gesture recognizers
+    // so we never block the app's own gestures.
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return false
+    }
+
+    override func shouldBeRequiredToFail(by otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return false
     }
 
     private func record(_ touches: Set<UITouch>, type: String) {

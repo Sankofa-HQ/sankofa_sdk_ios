@@ -64,11 +64,8 @@ final class SankofaCaptureCoordinator {
         
         currentEngine = (initialMode == .wireframe) ? wireframeEngine : screenshotEngine
         
-        if touchInterceptor == nil, let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) {
-            let interceptor = SankofaTouchInterceptor(target: nil, action: nil)
-            window.addGestureRecognizer(interceptor)
-            self.touchInterceptor = interceptor
-        }
+        // Try to attach right away; if the window isn't ready, tick() will retry.
+        attachTouchInterceptorIfNeeded()
 
         let proxy = WeakProxy(self)
         let link = CADisplayLink(target: proxy, selector: #selector(WeakProxy.onTick))
@@ -91,6 +88,9 @@ final class SankofaCaptureCoordinator {
      // MARK: - Capture Tick
 
     @objc internal func tick() {
+        // Retry interceptor attachment every tick until it succeeds
+        attachTouchInterceptorIfNeeded()
+
         // 💨 Throttling Fix: Use CACurrentMediaTime() for precise 2 FPS (even on 120Hz displays)
         let now = CACurrentMediaTime()
         guard now - lastCaptureTime >= (1.0 / targetFPS) else { return }
@@ -119,6 +119,9 @@ final class SankofaCaptureCoordinator {
         let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { [weak self] _, _ in
             guard let self = self else { return }
             
+            // Retry interceptor attachment in case it wasn't ready at start()
+            self.attachTouchInterceptorIfNeeded()
+            
             let now = CACurrentMediaTime()
             // Throttle to target FPS (e.g., once every 0.5s for 2 FPS)
             if (now - self.lastCaptureTime) >= (1.0 / self.targetFPS) {
@@ -143,6 +146,54 @@ final class SankofaCaptureCoordinator {
             CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
             runLoopObserver = nil
         }
+    }
+
+    // MARK: - Touch Interceptor Attachment
+
+    /// Attaches the touch interceptor to the key window.
+    /// Safe to call repeatedly — it's a no-op once attached.
+    /// Uses modern UIWindowScene API with legacy fallback.
+    private func attachTouchInterceptorIfNeeded() {
+        guard touchInterceptor == nil else { return }
+        
+        guard let window = Self.findKeyWindow() else { return }
+        
+        let interceptor = SankofaTouchInterceptor(target: nil, action: nil)
+        window.addGestureRecognizer(interceptor)
+        self.touchInterceptor = interceptor
+    }
+
+    /// Modern key-window discovery that works on iOS 13+ with scenes.
+    private static func findKeyWindow() -> UIWindow? {
+        // Modern: UIWindowScene-based lookup (iOS 15+)
+        if #available(iOS 15.0, *) {
+            for scene in UIApplication.shared.connectedScenes {
+                if let windowScene = scene as? UIWindowScene,
+                   scene.activationState == .foregroundActive {
+                    if let keyWindow = windowScene.keyWindow {
+                        return keyWindow
+                    }
+                    // Fallback: first visible window in the scene
+                    if let window = windowScene.windows.first(where: { $0.isKeyWindow }) {
+                        return window
+                    }
+                }
+            }
+        }
+        
+        // iOS 13-14 fallback
+        if #available(iOS 13.0, *) {
+            for scene in UIApplication.shared.connectedScenes {
+                if let windowScene = scene as? UIWindowScene {
+                    if let window = windowScene.windows.first(where: { $0.isKeyWindow }) {
+                        return window
+                    }
+                }
+            }
+        }
+        
+        // Legacy fallback
+        return UIApplication.shared.windows.first(where: { $0.isKeyWindow })
     }
 
     // MARK: - Escalation (Phase 3)
