@@ -46,6 +46,9 @@ public final class SankofaConfig: NSObject {
     /// Duration (in seconds) to stay in screenshot mode after a trigger event.
     @objc public var highFidelityDuration: TimeInterval
 
+    /// Scale factor for screenshot engine to reduce resolution/payload size. Defaults to 0.5.
+    @objc public var captureScale: CGFloat
+
     // MARK: - Init
 
     @objc
@@ -57,9 +60,10 @@ public final class SankofaConfig: NSObject {
         batchSize: Int = 50,
         recordSessions: Bool = true,
         maskAllInputs: Bool = true,
-        captureMode: SankofaCaptureMode = .wireframe,
-        highFidelityTriggers: [String] = [],
-        highFidelityDuration: TimeInterval = 30
+        captureScale: CGFloat = 0.5,
+        // captureMode: SankofaCaptureMode = .screenshot,
+        // highFidelityTriggers: [String] = [],
+        // highFidelityDuration: TimeInterval = 30
     ) {
         self.endpoint = endpoint
         self.debug = debug
@@ -68,9 +72,10 @@ public final class SankofaConfig: NSObject {
         self.batchSize = batchSize
         self.recordSessions = recordSessions
         self.maskAllInputs = maskAllInputs
-        self.captureMode = captureMode
-        self.highFidelityTriggers = highFidelityTriggers
-        self.highFidelityDuration = highFidelityDuration
+        self.captureScale = captureScale
+        self.captureMode = .screenshot
+        self.highFidelityTriggers = []
+        self.highFidelityDuration = 30
         super.init()
     }
 }

@@ -79,7 +79,9 @@ final class SankofaReplayUploader {
             
             // Interaction list for ripples
             if !interactions.isEmpty {
-                envelope["interactions"] = interactions.map { i in
+                var events = envelope["events"] as? [[String: Any]] ?? []
+                
+                let interactionEvents: [[String: Any]] = interactions.map { i in
                     let type: Int
                     switch i.type {
                     case "pointer_up": type = 0      // 0 = MouseUp (rrweb)
@@ -89,12 +91,20 @@ final class SankofaReplayUploader {
                     }
                     
                     return [
-                        "type": type,
-                        "x": self.safeDouble(i.x),
-                        "y": self.safeDouble(i.y),
+                        "type": 3,
+                        "data": [
+                            "source": 2, // MouseInteraction
+                            "type": type,
+                            "id": 1,
+                            "x": self.safeDouble(i.x),
+                            "y": self.safeDouble(i.y)
+                        ],
                         "timestamp": Int64(i.timestamp.timeIntervalSince1970 * 1000)
                     ]
                 }
+                
+                events.append(contentsOf: interactionEvents)
+                envelope["events"] = events
             }
 
             // KILLER 2 (OOM Cleanup): Immediately encode and flush to SQLite, DO NOT hold in memory.

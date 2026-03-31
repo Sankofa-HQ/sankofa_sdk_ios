@@ -12,6 +12,7 @@ final class SankofaCaptureCoordinator {
 
     private let initialMode: SankofaCaptureMode
     private let maskAllInputs: Bool
+    private let captureScale: CGFloat
     let uploader: SankofaReplayUploader
     private var sessionId: String = ""
 
@@ -20,7 +21,7 @@ final class SankofaCaptureCoordinator {
     // MARK: - Engines
 
     private lazy var wireframeEngine = SankofaWireframeEngine(sessionId: sessionId)
-    private lazy var screenshotEngine = SankofaScreenshotEngine(sessionId: sessionId, maskAllInputs: maskAllInputs)
+    private lazy var screenshotEngine = SankofaScreenshotEngine(sessionId: sessionId, maskAllInputs: maskAllInputs, captureScale: captureScale)
 
     private var currentEngine: SankofaCaptureEngine
     private let deviceInfo = SankofaDeviceInfo()
@@ -41,9 +42,10 @@ final class SankofaCaptureCoordinator {
 
     // MARK: - Init
 
-    init(mode: SankofaCaptureMode, maskAllInputs: Bool, uploader: SankofaReplayUploader) {
+    init(mode: SankofaCaptureMode, maskAllInputs: Bool, captureScale: CGFloat = 0.5, uploader: SankofaReplayUploader) {
         self.initialMode = mode
         self.maskAllInputs = maskAllInputs
+        self.captureScale = captureScale
         self.uploader = uploader
         self.currentEngine = SankofaWireframeEngine(sessionId: "") // Placeholder
     }
@@ -57,7 +59,7 @@ final class SankofaCaptureCoordinator {
         if !sessionId.isEmpty {
             self.sessionId = sessionId
             wireframeEngine = SankofaWireframeEngine(sessionId: self.sessionId)
-            screenshotEngine = SankofaScreenshotEngine(sessionId: self.sessionId, maskAllInputs: maskAllInputs)
+            screenshotEngine = SankofaScreenshotEngine(sessionId: self.sessionId, maskAllInputs: maskAllInputs, captureScale: captureScale)
         }
         
         currentEngine = (initialMode == .wireframe) ? wireframeEngine : screenshotEngine

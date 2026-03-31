@@ -74,6 +74,7 @@ public final class Sankofa: NSObject {
         let coordinator = SankofaCaptureCoordinator(
             mode: config.captureMode,
             maskAllInputs: config.maskAllInputs,
+            captureScale: config.captureScale,
             uploader: SankofaReplayUploader(
                 queueManager: qm,
                 logger: logger

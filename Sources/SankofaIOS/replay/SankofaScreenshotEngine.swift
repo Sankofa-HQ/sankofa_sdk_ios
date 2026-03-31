@@ -14,10 +14,12 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
 
     private let sessionId: String
     private let maskAllInputs: Bool
+    private let captureScale: CGFloat
 
-    init(sessionId: String, maskAllInputs: Bool) {
+    init(sessionId: String, maskAllInputs: Bool, captureScale: CGFloat = 0.5) {
         self.sessionId = sessionId
         self.maskAllInputs = maskAllInputs
+        self.captureScale = captureScale
     }
 
     // MARK: - SankofaCaptureEngine
@@ -34,7 +36,7 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
         let sensitiveRects = collectSensitiveRects(in: window)
 
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 0.5
+        format.scale = captureScale
         let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
 
         let maskedImage = renderer.image { ctx in
