@@ -34,6 +34,9 @@ public final class Sankofa: NSObject {
     private var config: SankofaConfig = SankofaConfig()
     private var apiKey: String = ""
     private var isInitialized = false
+    
+    /// The current screen name for stateful tagging (Heatmaps).
+    private var currentScreen: String = "Unknown"
 
     private var logger = SankofaLogger(debug: false)
     private var identity = SankofaIdentity()
@@ -84,6 +87,7 @@ public final class Sankofa: NSObject {
         self.captureCoordinator = coordinator
 
         let observer = SankofaLifecycleObserver(
+            sessionManager: sessionManager,
             flushManager: fm,
             captureCoordinator: coordinator,
             trackLifecycle: config.trackLifecycleEvents,
@@ -95,6 +99,13 @@ public final class Sankofa: NSObject {
 
         logger.log("✅ [v2] Sankofa initialized (endpoint: \(config.endpoint))")
 
+        // First Time Open Logic
+        let firstOpenKey = "dev.sankofa.first_open_detected"
+        if !UserDefaults.standard.bool(forKey: firstOpenKey) {
+            UserDefaults.standard.set(true, forKey: firstOpenKey)
+            track("$app_open_first_time")
+        }
+
         if config.endpoint.contains("localhost") || config.endpoint.contains("127.0.0.1") {
             #if !targetEnvironment(simulator)
             logger.warn("⚠️ Using 'localhost' on a physical device will fail. Use your machine's local IP (e.g., http://192.168.1.10:8080) instead.")
@@ -105,8 +116,28 @@ public final class Sankofa: NSObject {
         fm.start()
 
         if config.recordSessions {
-            coordinator.start(sessionId: sessionManager.sessionId)
+            coordinator.start(sessionId: sessionManager.sessionId, screenNameProvider: { [weak self] in
+                guard let self = self else { return "Unknown" }
+                // 🚀 Manual > Auto Hierarchy
+                if self.currentScreen != "Unknown" {
+                    return self.currentScreen
+                }
+                return SankofaScreenTracker.findCurrentScreenName() ?? "Unknown"
+            })
         }
+        
+        // Initial session start event
+        track("$session_start")
+    }
+    
+    /// Explicitly tag the screen the user is currently viewing.
+    /// Used for heatmaps and behavioral context.
+    @objc
+    public func screen(_ name: String, properties: [String: Any] = [:]) {
+        self.currentScreen = name
+        var screenProps = properties
+        screenProps["$screen_name"] = name
+        track("$screen_view", properties: screenProps)
     }
 
     /// Identify a user by their unique ID. Merges anonymous history into the profile.
@@ -125,7 +156,8 @@ public final class Sankofa: NSObject {
             "distinct_id": userId,
             "alias_id": identity.anonymousId,
             "properties": [
-                "$session_id": sessionManager.sessionId
+                "$session_id": sessionManager.sessionId,
+                "$screen_name": currentScreen
             ],
             "default_properties": defaultProperties(),
             "timestamp": Sankofa.iso8601Formatter.string(from: Date()),
@@ -143,6 +175,7 @@ public final class Sankofa: NSObject {
         var eventProps = properties
         eventProps["$event_name"] = event
         eventProps["$session_id"] = sessionManager.sessionId
+        eventProps["$screen_name"] = currentScreen
         
         let payload: [String: Any] = [
             "type": "track",

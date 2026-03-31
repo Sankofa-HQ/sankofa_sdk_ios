@@ -14,6 +14,7 @@ final class SankofaCaptureCoordinator {
     private let captureScale: CGFloat
     let uploader: SankofaReplayUploader
     private var sessionId: String = ""
+    private var screenNameProvider: () -> String = { "Unknown" }
 
     // MARK: - Engine
 
@@ -25,6 +26,7 @@ final class SankofaCaptureCoordinator {
 
     private let deviceInfo = SankofaDeviceInfo()
     private var touchInterceptor: SankofaTouchInterceptor?
+    private var keyboardInteractions: [SankofaTouchInterceptor.Interaction] = []
 
     // MARK: - Scheduler
 
@@ -32,6 +34,7 @@ final class SankofaCaptureCoordinator {
     private var lastCaptureTime: TimeInterval = 0
     private let targetFPS: Double = 2.0
     private var isRunning = false
+    private var tokens: [NSObjectProtocol] = []
 
     // MARK: - Init
 
@@ -39,13 +42,15 @@ final class SankofaCaptureCoordinator {
         self.maskAllInputs = maskAllInputs
         self.captureScale = captureScale
         self.uploader = uploader
+        setupKeyboardListeners()
     }
 
     // MARK: - Lifecycle
 
-    func start(sessionId: String = "") {
+    func start(sessionId: String = "", screenNameProvider: @escaping () -> String = { "Unknown" }) {
         guard !isRunning else { return }
         isRunning = true
+        self.screenNameProvider = screenNameProvider
 
         if !sessionId.isEmpty {
             self.sessionId = sessionId
@@ -65,6 +70,8 @@ final class SankofaCaptureCoordinator {
         isRunning = false
         stopIdleCapture()
     }
+    
+    var isStarted: Bool { isRunning }
 
     // MARK: - Idle Sniper
 
@@ -86,7 +93,14 @@ final class SankofaCaptureCoordinator {
             if (now - self.lastCaptureTime) >= (1.0 / self.targetFPS) {
                 self.lastCaptureTime = now
 
-                let interactions = self.touchInterceptor?.flush() ?? []
+                var interactions = self.touchInterceptor?.flush() ?? []
+                
+                // Add keyboard events collected since last capture
+                if !self.keyboardInteractions.isEmpty {
+                    interactions.append(contentsOf: self.keyboardInteractions)
+                    self.keyboardInteractions.removeAll()
+                }
+                
                 let context = self.deviceInfo.deviceContext()
 
                 self.screenshotEngine.captureFrame { frame in
@@ -115,9 +129,36 @@ final class SankofaCaptureCoordinator {
         guard touchInterceptor == nil else { return }
         guard let window = Self.findKeyWindow() else { return }
 
-        let interceptor = SankofaTouchInterceptor(target: nil, action: nil)
+        let interceptor = SankofaTouchInterceptor(screenNameProvider: screenNameProvider)
         window.addGestureRecognizer(interceptor)
         self.touchInterceptor = interceptor
+    }
+    
+    // MARK: - Keyboard Listeners
+    
+    private func setupKeyboardListeners() {
+        let nc = NotificationCenter.default
+        
+        nc.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.recordKeyboardEvent(type: "keyboard_show")
+        }
+        
+        nc.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.recordKeyboardEvent(type: "keyboard_hide")
+        }
+    }
+    
+    private func recordKeyboardEvent(type: String) {
+        let interaction = SankofaTouchInterceptor.Interaction(
+            type: type,
+            x: 0,
+            y: 0,
+            absoluteY: 0,
+            scrollOffsetY: 0,
+            screen: screenNameProvider(),
+            timestamp: Date()
+        )
+        keyboardInteractions.append(interaction)
     }
 
     /// Modern key-window discovery that works on iOS 13+ with scenes.

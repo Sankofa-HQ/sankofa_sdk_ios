@@ -17,14 +17,19 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
         let type: String // "pointer_down", "pointer_up", "pointer_move"
         let x: CGFloat
         let y: CGFloat
+        let absoluteY: CGFloat
+        let scrollOffsetY: CGFloat
+        let screen: String
         let timestamp: Date
     }
 
     private(set) var pendingInteractions: [Interaction] = []
     private let queue = DispatchQueue(label: "dev.sankofa.replay.touch")
+    private let screenNameProvider: () -> String
 
-    override init(target: Any?, action: Selector?) {
-        super.init(target: target, action: action)
+    init(screenNameProvider: @escaping () -> String) {
+        self.screenNameProvider = screenNameProvider
+        super.init(target: nil, action: nil)
         // CRITICAL: All three must be false so we don't interfere with the host app
         self.cancelsTouchesInView = false
         self.delaysTouchesBegan = false
@@ -77,16 +82,40 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
     }
 
     private func record(_ touches: Set<UITouch>, type: String) {
-        guard let touch = touches.first, let view = self.view else { return }
-        let location = touch.location(in: view)
+        guard let touch = touches.first, let window = self.view as? UIWindow else { return }
+        let location = touch.location(in: window)
+        
+        // 🚀 Infinite Scroll Support: Find active scroll offset
+        var scrollOffsetY: CGFloat = 0
+        if let scrollView = findActiveScrollView(in: window) {
+            scrollOffsetY = scrollView.contentOffset.y
+        }
+        
+        let absoluteY = location.y + scrollOffsetY
+        let screen = screenNameProvider()
         
         queue.async {
             self.pendingInteractions.append(Interaction(
                 type: type,
                 x: location.x,
                 y: location.y,
+                absoluteY: absoluteY,
+                scrollOffsetY: scrollOffsetY,
+                screen: screen,
                 timestamp: Date()
             ))
         }
+    }
+    
+    private func findActiveScrollView(in view: UIView) -> UIScrollView? {
+        if let scrollView = view as? UIScrollView, scrollView.isScrollEnabled {
+            return scrollView
+        }
+        for subview in view.subviews {
+            if let found = findActiveScrollView(in: subview) {
+                return found
+            }
+        }
+        return nil
     }
 }
