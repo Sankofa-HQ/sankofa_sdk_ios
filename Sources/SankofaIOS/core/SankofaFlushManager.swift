@@ -11,6 +11,8 @@ final class SankofaFlushManager {
     private let batchSize: Int
     private let flushInterval: TimeInterval
     private let logger: SankofaLogger
+    
+    var onCommandsReceived: (([[String: Any]]) -> Void)?
 
     private var timer: Timer?
     private var isFlushing = false
@@ -265,9 +267,17 @@ final class SankofaFlushManager {
         request.httpBody = body
 
         return await withCheckedContinuation { continuation in
-            let task = session.dataTask(with: request) { [weak self] _, response, error in
+            let task = session.dataTask(with: request) { [weak self] data, response, error in
                 if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                     self?.logger.log("✅ Flushed \(pendingIds.count) events")
+                    
+                    // 🎮 Process Commands
+                    if let data = data,
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let commands = json["commands"] as? [[String: Any]] {
+                        self?.onCommandsReceived?(commands)
+                    }
+                    
                     continuation.resume(returning: pendingIds)
                 } else {
                     if let error = error {

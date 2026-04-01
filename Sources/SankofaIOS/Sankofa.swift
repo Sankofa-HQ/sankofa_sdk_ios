@@ -74,6 +74,10 @@ public final class Sankofa: NSObject {
             logger: logger
         )
         self.flushManager = fm
+        
+        fm.onCommandsReceived = { [weak self] commands in
+            self?._handleServerCommands(commands)
+        }
 
         let coordinator = SankofaCaptureCoordinator(
             maskAllInputs: config.maskAllInputs,
@@ -250,4 +254,18 @@ public final class Sankofa: NSObject {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
+    
+    private func _handleServerCommands(_ commands: [[String: Any]]) {
+        for cmd in commands {
+            guard let type = cmd["type"] as? String,
+                  let params = cmd["params"] as? [String: Any] else { continue }
+            
+            if type == "CAPTURE_PRISTINE", let _ = params["screen"] as? String {
+                logger.log("🔥 📸 Server requested pristine capture")
+                Task { @MainActor in
+                    self.captureCoordinator?.triggerHighFidelityMode(duration: 1.0)
+                }
+            }
+        }
+    }
 }
