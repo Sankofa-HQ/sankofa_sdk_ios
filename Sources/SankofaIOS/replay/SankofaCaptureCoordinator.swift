@@ -70,8 +70,22 @@ final class SankofaCaptureCoordinator {
         isRunning = false
         stopIdleCapture()
     }
-    
+
     var isStarted: Bool { isRunning }
+
+    /// Forces an immediate high-fidelity capture cycle, typically after a server-side request.
+    /// Even if the coordinator is in a throttled state, this ensures a baseline is sent.
+    func triggerHighFidelityMode(duration: TimeInterval) {
+        // Snap! Force an immediate capture cycle.
+        let context = self.deviceInfo.deviceContext()
+        let interactions = self.touchInterceptor?.flush() ?? []
+        let screen = self.screenNameProvider()
+
+        screenshotEngine.captureFrame { [weak self] frame in
+            guard let self = self, let frame = frame else { return }
+            self.uploader.upload(frame, screenName: screen, deviceContext: context, interactions: interactions)
+        }
+    }
 
     // MARK: - Idle Sniper
 
@@ -102,10 +116,11 @@ final class SankofaCaptureCoordinator {
                 }
                 
                 let context = self.deviceInfo.deviceContext()
+                let screen = self.screenNameProvider()
 
                 self.screenshotEngine.captureFrame { frame in
                     guard let frame = frame else { return }
-                    self.uploader.upload(frame, deviceContext: context, interactions: interactions)
+                    self.uploader.upload(frame, screenName: screen, deviceContext: context, interactions: interactions)
                 }
             }
         }

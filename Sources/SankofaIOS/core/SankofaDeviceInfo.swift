@@ -46,7 +46,8 @@ final class SankofaDeviceInfo {
         return [
             "screen_width": Int(bounds.width),
             "screen_height": Int(bounds.height),
-            "pixel_ratio": Double(scale)
+            "pixel_ratio": Double(scale),
+            "$os": "iOS"
         ]
     }
 

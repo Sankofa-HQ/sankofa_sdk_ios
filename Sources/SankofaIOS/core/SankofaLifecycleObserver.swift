@@ -46,9 +46,9 @@ final class SankofaLifecycleObserver {
                 self.onLifecycleEvent("$session_start")
                 
                 // If we are recording, restart coordinator with new ID
-                if self.captureCoordinator?.isStarted == true {
-                    self.captureCoordinator?.stop()
-                    self.captureCoordinator?.start(sessionId: self.sessionManager.sessionId)
+                if self.captureCoordinator.isStarted == true {
+                    self.captureCoordinator.stop()
+                    self.captureCoordinator.start(sessionId: self.sessionManager.sessionId)
                 }
             }
             

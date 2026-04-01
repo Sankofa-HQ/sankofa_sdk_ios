@@ -23,7 +23,7 @@ final class SankofaReplayUploader {
         self.distinctId = id
     }
 
-    func upload(_ frame: SankofaFrame, deviceContext: [String: Any]? = nil, interactions: [SankofaTouchInterceptor.Interaction] = []) {
+    func upload(_ frame: SankofaFrame, screenName: String = "Unknown", deviceContext: [String: Any]? = nil, interactions: [SankofaTouchInterceptor.Interaction] = []) {
         uploadQueue.async { [weak self] in
             guard let self else { return }
 
@@ -36,14 +36,19 @@ final class SankofaReplayUploader {
             // 📦 DYNAMIC PAYLOAD: Wrap in the dashboard-expected JSON schema.
             var envelope: [String: Any]
             let replayMode = "screenshot"
+            
+            // 🔥 App version for heatmap version partitioning
+            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
 
             switch frame.payload {
             case .screenshot(let data):
                 envelope = [
                     "mode": "screenshot",
+                    "$app_version": appVersion,
                     "frames": [[
                         "timestamp": Int64(frame.timestamp.timeIntervalSince1970 * 1000),
-                        "image_base64": data.base64EncodedString()
+                        "image_base64": data.base64EncodedString(),
+                        "screen": screenName
                     ]]
                 ]
             }
@@ -60,10 +65,10 @@ final class SankofaReplayUploader {
                 let interactionEvents: [[String: Any]] = interactions.map { i in
                     let type: Int
                     switch i.type {
-                    case "pointer_up": type = 0      // 0 = MouseUp (rrweb)
-                    case "pointer_down": type = 1    // 1 = MouseDown (rrweb)
-                    case "pointer_move": type = 4    // 4 = MouseMove (rrweb)
-                    default: type = 0
+                    case "pointer_down": type = 1    // 1 = MouseDown (rrweb MouseInteraction)
+                    case "pointer_up":   type = 0    // 0 = MouseUp   (rrweb MouseInteraction)
+                    case "pointer_move": type = 6    // 6 = TouchMove (rrweb MouseInteraction)
+                    default: type = 1
                     }
                     
                     return [
