@@ -47,25 +47,16 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
     // MARK: - Touch Tracking
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        // IMPORTANT: Do NOT transition to .began here.
-        //
-        // A recognizer in .began holds the "system gesture gate" open — iOS forces all
-        // system gestures (home swipe, Control Center, back swipe) to wait for us to
-        // resolve before they can proceed. If we hold .began for any meaningful duration,
-        // iOS logs: "System gesture gate timed out" and routes system gestures around us.
-        //
-        // A recognizer in .possible STILL receives all touch events (moved, ended, cancelled)
-        // but does NOT hold the gate. This is the correct mode for a passive observer.
-        record(touches, type: "pointer_down")
+        record(touches, type: "pointer_down", with: event)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         // Still .possible — we receive all moves without holding any gate.
-        record(touches, type: "pointer_move")
+        record(touches, type: "pointer_move", with: event)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        record(touches, type: "pointer_up")
+        record(touches, type: "pointer_up", with: event)
         // .failed forces an immediate reset to .possible for the next touch sequence.
         // This is cleaner than .ended for a non-recognizing recognizer because it
         // explicitly signals to the system that we didn't "win" this sequence.
@@ -73,7 +64,7 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        record(touches, type: "pointer_up")
+        record(touches, type: "pointer_up", with: event)
         self.state = .failed
     }
 
@@ -93,9 +84,22 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
         return false
     }
 
-    private func record(_ touches: Set<UITouch>, type: String) {
-        guard let touch = touches.first, let window = self.view as? UIWindow else { return }
-        let location = touch.location(in: window)
+    private func record(_ touches: Set<UITouch>, type: String, with event: UIEvent? = nil) {
+        guard let firstTouch = touches.first, let window = self.view as? UIWindow else { return }
+        
+        var location = firstTouch.location(in: window)
+        var interactionType = type
+        
+        // 🔍 Pinch & Zoom Detection (Midpoint Tracking via All Touches)
+        // We use event?.allTouches to see the full state of the screen, not just the subset
+        // of touches that moved in this specific frame.
+        if let allTouches = event?.touches(for: window), allTouches.count == 2 {
+            let touchesArray = Array(allTouches)
+            let p1 = touchesArray[0].location(in: window)
+            let p2 = touchesArray[1].location(in: window)
+            location = CGPoint(x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2)
+            interactionType = "pinch"
+        }
         
         // 🚀 Infinite Scroll Support: Find active scroll offset
         var scrollOffsetY: CGFloat = 0
@@ -108,7 +112,7 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
         
         queue.async {
             self.pendingInteractions.append(Interaction(
-                type: type,
+                type: interactionType,
                 x: location.x,
                 y: location.y,
                 absoluteY: absoluteY,
