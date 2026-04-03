@@ -44,6 +44,16 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
         }
     }
 
+    /// Evaluates the current scroll offset of the key window.
+    /// Useful for idle-snapping when no interactions have occurred recently.
+    var currentScrollOffsetY: CGFloat {
+        guard let window = self.view as? UIWindow else { return 0 }
+        if let scrollView = findActiveScrollView(in: window) {
+            return scrollView.contentOffset.y
+        }
+        return 0
+    }
+
     // MARK: - Touch Tracking
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {

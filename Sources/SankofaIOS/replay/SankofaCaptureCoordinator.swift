@@ -98,10 +98,11 @@ final class SankofaCaptureCoordinator {
         let context = self.deviceInfo.deviceContext()
         let interactions = self.touchInterceptor?.flush() ?? []
         let screen = self.screenNameProvider()
+        let scrollY = self.touchInterceptor?.currentScrollOffsetY ?? 0
 
         screenshotEngine.captureFrame { [weak self] frame in
             guard let self = self, let frame = frame else { return }
-            self.uploader.upload(frame, screenName: screen, deviceContext: context, interactions: interactions)
+            self.uploader.upload(frame, screenName: screen, deviceContext: context, interactions: interactions, scrollOffsetY: scrollY)
         }
     }
 
@@ -155,10 +156,11 @@ final class SankofaCaptureCoordinator {
 
             let context = self.deviceInfo.deviceContext()
             let screen = self.screenNameProvider()
+            let scrollY = self.touchInterceptor?.currentScrollOffsetY ?? 0
 
             self.screenshotEngine.captureFrame { frame in
                 guard let frame = frame else { return }
-                self.uploader.upload(frame, screenName: screen, deviceContext: context, interactions: interactions)
+                self.uploader.upload(frame, screenName: screen, deviceContext: context, interactions: interactions, scrollOffsetY: scrollY)
             }
         }
 

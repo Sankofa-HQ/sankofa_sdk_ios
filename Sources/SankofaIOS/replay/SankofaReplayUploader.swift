@@ -23,7 +23,7 @@ final class SankofaReplayUploader {
         self.distinctId = id
     }
 
-    func upload(_ frame: SankofaFrame, screenName: String = "Unknown", deviceContext: [String: Any]? = nil, interactions: [SankofaTouchInterceptor.Interaction] = []) {
+    func upload(_ frame: SankofaFrame, screenName: String = "Unknown", deviceContext: [String: Any]? = nil, interactions: [SankofaTouchInterceptor.Interaction] = [], scrollOffsetY: CGFloat = 0) {
         uploadQueue.async { [weak self] in
             guard let self else { return }
 
@@ -48,7 +48,8 @@ final class SankofaReplayUploader {
                     "frames": [[
                         "timestamp": Int64(frame.timestamp.timeIntervalSince1970 * 1000),
                         "image_base64": data.base64EncodedString(),
-                        "screen": screenName
+                        "screen": screenName,
+                        "scroll_y": self.safeDouble(scrollOffsetY)
                     ]]
                 ]
             }
