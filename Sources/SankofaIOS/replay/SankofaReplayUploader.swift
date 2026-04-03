@@ -72,8 +72,11 @@ final class SankofaReplayUploader {
                     }
                     
                     // Send RAW CGFloat coordinates (UIKit points).
-                    // The session replay player already normalizes by dividing by screen dims.
-                    // The server worker normalizes before inserting into replay_interactions.
+                    // x: viewport-relative (no scroll offset needed — horizontal scroll is rare)
+                    // y: ABSOLUTE content position (viewport_y + scroll_offset_y).
+                    //    This makes heatmap dots scroll-aware: a tap 300pt down while scrolled
+                    //    200pt = absoluteY 500pt, placing the dot correctly on the full content map.
+                    // The session replay player uses its own viewport-relative rendering and is unaffected.
                     // safeDouble() guards against NaN/Infinity from UIKit edge cases.
                     return [
                         "type": 3,
@@ -82,7 +85,7 @@ final class SankofaReplayUploader {
                             "type": type,
                             "id": 1,
                             "x": self.safeDouble(i.x),
-                            "y": self.safeDouble(i.y)
+                            "y": self.safeDouble(i.absoluteY)
                         ],
                         "timestamp": Int64(i.timestamp.timeIntervalSince1970 * 1000)
                     ]

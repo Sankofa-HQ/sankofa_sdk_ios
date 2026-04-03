@@ -47,34 +47,46 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
     // MARK: - Touch Tracking
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        // CRITICAL: Transition to .began so the system doesn't cancel us
-        self.state = .began
+        // IMPORTANT: Do NOT transition to .began here.
+        //
+        // A recognizer in .began holds the "system gesture gate" open — iOS forces all
+        // system gestures (home swipe, Control Center, back swipe) to wait for us to
+        // resolve before they can proceed. If we hold .began for any meaningful duration,
+        // iOS logs: "System gesture gate timed out" and routes system gestures around us.
+        //
+        // A recognizer in .possible STILL receives all touch events (moved, ended, cancelled)
+        // but does NOT hold the gate. This is the correct mode for a passive observer.
         record(touches, type: "pointer_down")
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        self.state = .changed
+        // Still .possible — we receive all moves without holding any gate.
         record(touches, type: "pointer_move")
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        self.state = .ended
         record(touches, type: "pointer_up")
+        // .failed forces an immediate reset to .possible for the next touch sequence.
+        // This is cleaner than .ended for a non-recognizing recognizer because it
+        // explicitly signals to the system that we didn't "win" this sequence.
+        self.state = .failed
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        self.state = .cancelled
         record(touches, type: "pointer_up")
+        self.state = .failed
     }
 
-    // Allow simultaneous recognition with ALL other gesture recognizers
-    // so we never block the app's own gestures.
+    // We never prevent other recognizers from firing (we're a passive observer).
     override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool {
         return false
     }
 
+    // We CAN be superseded by any recognizer — including system recognizers.
+    // Returning false here was wrong: it told iOS "you can't cancel me", which forced
+    // the system gate to wait for us even during system gestures. Now we yield properly.
     override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
-        return false
+        return true
     }
 
     override func shouldBeRequiredToFail(by otherGestureRecognizer: UIGestureRecognizer) -> Bool {
