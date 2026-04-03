@@ -71,6 +71,10 @@ final class SankofaReplayUploader {
                     default: type = 1
                     }
                     
+                    // Send RAW CGFloat coordinates (UIKit points).
+                    // The session replay player already normalizes by dividing by screen dims.
+                    // The server worker normalizes before inserting into replay_interactions.
+                    // safeDouble() guards against NaN/Infinity from UIKit edge cases.
                     return [
                         "type": 3,
                         "data": [

@@ -35,6 +35,10 @@ final class SankofaCaptureCoordinator {
     private let targetFPS: Double = 2.0
     private var isRunning = false
     private var tokens: [NSObjectProtocol] = []
+    
+    /// Accumulated interactions that have not yet been bundled into a frame.
+    /// Preserved across throttled runloop cycles so idle-screen taps are never dropped.
+    private var pendingCarryoverInteractions: [SankofaTouchInterceptor.Interaction] = []
 
     // MARK: - Init
 
@@ -47,10 +51,24 @@ final class SankofaCaptureCoordinator {
 
     // MARK: - Lifecycle
 
-    func start(sessionId: String = "", screenNameProvider: @escaping () -> String = { "Unknown" }) {
+    /// Starts or resumes the capture coordinator.
+    ///
+    /// - Parameters:
+    ///   - sessionId: The session ID to use. If empty, the existing session ID is kept.
+    ///   - screenNameProvider: A closure returning the current screen name.
+    ///     Pass `nil` (the default) to **preserve** the existing provider — this is the
+    ///     correct behaviour for foreground-resume calls from `SankofaLifecycleObserver`
+    ///     which should not clobber the provider set during the initial `start`.
+    func start(sessionId: String = "", screenNameProvider: (() -> String)? = nil) {
         guard !isRunning else { return }
         isRunning = true
-        self.screenNameProvider = screenNameProvider
+
+        // Only replace the screenNameProvider if one is explicitly supplied.
+        // This prevents foreground-resume calls (which omit the provider) from
+        // resetting it to the "Unknown" default and losing screen attribution.
+        if let provider = screenNameProvider {
+            self.screenNameProvider = provider
+        }
 
         if !sessionId.isEmpty {
             self.sessionId = sessionId
@@ -92,7 +110,10 @@ final class SankofaCaptureCoordinator {
     private func startIdleCapture() {
         stopIdleCapture()
 
-        // 🎯 SNIPER: Only snaps the screen when the UI thread is resting
+        // 🎯 SNIPER: Only snaps the screen when the UI thread is resting.
+        // CRITICAL FIX: Interactions are ACCUMULATED across throttle-skipped cycles.
+        // This ensures that taps on a static/idle screen are NEVER dropped — they
+        // are carried forward and bundled into the very next frame that gets uploaded.
         let observer = CFRunLoopObserverCreateWithHandler(
             kCFAllocatorDefault,
             CFRunLoopActivity.beforeWaiting.rawValue,
@@ -103,25 +124,41 @@ final class SankofaCaptureCoordinator {
 
             self.attachTouchInterceptorIfNeeded()
 
+            // Always drain the touch buffer into the carryover bucket, even if we
+            // are going to skip this frame due to rate-limiting. This is the key fix:
+            // interactions are NEVER thrown away between frame captures.
+            let freshTouches = self.touchInterceptor?.flush() ?? []
+            self.pendingCarryoverInteractions.append(contentsOf: freshTouches)
+
+            // Accumulate keyboard events
+            if !self.keyboardInteractions.isEmpty {
+                self.pendingCarryoverInteractions.append(contentsOf: self.keyboardInteractions)
+                self.keyboardInteractions.removeAll()
+            }
+
             let now = CACurrentMediaTime()
-            if (now - self.lastCaptureTime) >= (1.0 / self.targetFPS) {
-                self.lastCaptureTime = now
+            let frameInterval = 1.0 / self.targetFPS
+            let timeSinceLast = now - self.lastCaptureTime
 
-                var interactions = self.touchInterceptor?.flush() ?? []
-                
-                // Add keyboard events collected since last capture
-                if !self.keyboardInteractions.isEmpty {
-                    interactions.append(contentsOf: self.keyboardInteractions)
-                    self.keyboardInteractions.removeAll()
-                }
-                
-                let context = self.deviceInfo.deviceContext()
-                let screen = self.screenNameProvider()
+            // Rate-limit: skip capture if too soon.
+            // EXCEPTION: if we have accumulated interactions and the screen is static,
+            // force a capture after 2× the normal interval to flush them out.
+            let hasCarriedInteractions = !self.pendingCarryoverInteractions.isEmpty
+            let forceCaptureDueToInteractions = hasCarriedInteractions && timeSinceLast >= frameInterval * 1.5
 
-                self.screenshotEngine.captureFrame { frame in
-                    guard let frame = frame else { return }
-                    self.uploader.upload(frame, screenName: screen, deviceContext: context, interactions: interactions)
-                }
+            guard timeSinceLast >= frameInterval || forceCaptureDueToInteractions else { return }
+            self.lastCaptureTime = now
+
+            // Snapshot and clear the carryover bucket atomically
+            let interactions = self.pendingCarryoverInteractions
+            self.pendingCarryoverInteractions = []
+
+            let context = self.deviceInfo.deviceContext()
+            let screen = self.screenNameProvider()
+
+            self.screenshotEngine.captureFrame { frame in
+                guard let frame = frame else { return }
+                self.uploader.upload(frame, screenName: screen, deviceContext: context, interactions: interactions)
             }
         }
 
