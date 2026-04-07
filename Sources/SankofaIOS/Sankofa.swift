@@ -166,7 +166,7 @@ public final class Sankofa: NSObject {
             "default_properties": defaultProperties(),
             "timestamp": Sankofa.iso8601Formatter.string(from: Date()),
             "message_id": UUID().uuidString.lowercased(),
-            "lib_version": "ios-1.0.0"
+            "lib_version": Sankofa.libVersion
         ]
         queueManager?.enqueue(payload)
     }
@@ -189,7 +189,7 @@ public final class Sankofa: NSObject {
             "default_properties": defaultProperties(),
             "timestamp": Sankofa.iso8601Formatter.string(from: Date()),
             "message_id": UUID().uuidString.lowercased(),
-            "lib_version": "ios-1.0.0"
+            "lib_version": Sankofa.libVersion
         ]
 
         logger.log("📈 [v2] track → \(event)")
@@ -198,14 +198,15 @@ public final class Sankofa: NSObject {
 
     /// Set profile attributes for the current user.
     @objc
-    public func setPerson(name: String? = nil, email: String? = nil, properties: [String: Any] = [:]) {
+    public func setPerson(name: String? = nil, email: String? = nil, avatar: String? = nil, properties: [String: Any] = [:]) {
         assertInitialized()
-        
+
         var personProps = properties
         if let name { personProps["$name"] = name }
         if let email { personProps["$email"] = email }
+        if let avatar { personProps["$avatar"] = avatar }
         personProps["$session_id"] = sessionManager.sessionId
-        
+
         let payload: [String: Any] = [
             "type": "people",
             "distinct_id": identity.distinctId,
@@ -213,7 +214,7 @@ public final class Sankofa: NSObject {
             "default_properties": defaultProperties(),
             "timestamp": Sankofa.iso8601Formatter.string(from: Date()),
             "message_id": UUID().uuidString.lowercased(),
-            "lib_version": "ios-1.0.0"
+            "lib_version": Sankofa.libVersion
         ]
 
         logger.log("👤 [v2] setPerson")
@@ -247,7 +248,20 @@ public final class Sankofa: NSObject {
     }
 
     private func assertInitialized(file: StaticString = #file, line: UInt = #line) {
+        guard isInitialized else {
+            #if DEBUG
+            preconditionFailure(
+                "Sankofa.initialize() must be called before using the SDK.",
+                file: file, line: line
+            )
+            #else
+            logger.warn("⚠️ Sankofa: initialize() must be called before using the SDK. Call is being dropped.")
+            #endif
+            return
+        }
     }
+
+    private static let libVersion = "ios-1.0.0"
 
     private static let iso8601Formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()

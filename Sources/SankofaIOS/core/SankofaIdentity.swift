@@ -14,26 +14,34 @@ final class SankofaIdentity {
         storage.string(forKey: distinctKey) ?? anonymousId
     }
 
+    /// In-memory cache for the anonymous ID so we stay consistent within a session
+    /// without hitting UserDefaults on every read.
+    private var _anonymousId: String?
+
     /// A stable, persistent anonymous ID generated on first launch.
-    private(set) lazy var anonymousId: String = {
+    /// Unlike a lazy var, this always reflects the latest value written by reset().
+    var anonymousId: String {
+        if let cached = _anonymousId { return cached }
         if let existing = storage.string(forKey: anonKey) {
+            _anonymousId = existing
             return existing
         }
         let newId = "anon_\(UUID().uuidString)"
         storage.set(newId, forKey: anonKey)
+        _anonymousId = newId
         return newId
-    }()
+    }
 
     /// Link anonymous data to a known user ID.
     func identify(userId: String) {
         storage.set(userId, forKey: distinctKey)
     }
 
-    /// Clear identity on logout. Resets distinct_id back to the anonymous ID.
+    /// Clear identity on logout. Resets distinct_id back to a fresh anonymous ID.
     func reset() {
         storage.removeObject(forKey: distinctKey)
-        // Rotate anonymous ID so the new session is fresh.
         let newAnonId = "anon_\(UUID().uuidString)"
         storage.set(newAnonId, forKey: anonKey)
+        _anonymousId = newAnonId   // keep in-memory cache in sync
     }
 }
