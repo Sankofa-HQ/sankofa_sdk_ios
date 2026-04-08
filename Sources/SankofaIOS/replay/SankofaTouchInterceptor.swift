@@ -27,6 +27,34 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
     private let queue = DispatchQueue(label: "dev.sankofa.replay.touch")
     private let screenNameProvider: () -> String
 
+    // ── Move-event rate limiting ──────────────────────────────────────────
+    // touchesMoved fires up to 120 times per second on a 120Hz iPad and
+    // ~60Hz on iPhone.  Without throttling, a single 5-second swipe used to
+    // produce 600+ rows in replay_interactions, inflating "Gestures on
+    // Screen" by 100x and triggering false rage-tap clusters.
+    //
+    // Throttle = max 1 move sample per 50ms (~20 Hz, same as web SDK).
+    // Coalesce  = drop moves whose (x,y) is within MOVE_COALESCE_PX of the
+    //             last recorded move on the same screen — eliminates jitter
+    //             samples while a finger is held still.
+    private static let MOVE_THROTTLE_INTERVAL: TimeInterval = 0.05
+    private static let MOVE_COALESCE_PX: CGFloat = 4
+    private var lastMoveSampleAt: TimeInterval = 0
+    private var lastMoveX: CGFloat = -9999
+    private var lastMoveY: CGFloat = -9999
+
+    // ── Double-tap recognition ────────────────────────────────────────────
+    // When a touchesBegan event lands within DOUBLE_TAP_INTERVAL seconds and
+    // DOUBLE_TAP_RADIUS_PX of the previous touchesBegan, we emit an
+    // additional "double_tap" Interaction at the same coordinates.  The
+    // dashboard reads this as interaction_type = 4 and renders a "2×"
+    // marker overlay distinct from regular taps.
+    private static let DOUBLE_TAP_INTERVAL: TimeInterval = 0.35
+    private static let DOUBLE_TAP_RADIUS_PX: CGFloat = 25
+    private var lastTapAt: TimeInterval = 0
+    private var lastTapX: CGFloat = -9999
+    private var lastTapY: CGFloat = -9999
+
     init(screenNameProvider: @escaping () -> String) {
         self.screenNameProvider = screenNameProvider
         super.init(target: nil, action: nil)
@@ -57,11 +85,74 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
     // MARK: - Touch Tracking
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        // A new touch sequence resets the move tracker so the first move
+        // sample after the down is always recorded.
+        lastMoveSampleAt = 0
+        lastMoveX = -9999
+        lastMoveY = -9999
         record(touches, type: "pointer_down", with: event)
+
+        // ── Double-tap recognition ───────────────────────────────────────
+        // Use the FIRST touch's window-relative location for the recognizer
+        // (single-finger taps only — multi-touch begins skip this branch).
+        guard let firstTouch = touches.first,
+              let window = self.view as? UIWindow,
+              event.touches(for: window)?.count ?? 1 == 1
+        else { return }
+
+        let location = firstTouch.location(in: window)
+        let now = CACurrentMediaTime()
+        let dt = now - lastTapAt
+        let dx = location.x - lastTapX
+        let dy = location.y - lastTapY
+        let isDouble =
+            lastTapAt > 0 &&
+            dt < Self.DOUBLE_TAP_INTERVAL &&
+            dx * dx + dy * dy <
+                Self.DOUBLE_TAP_RADIUS_PX * Self.DOUBLE_TAP_RADIUS_PX
+
+        if isDouble {
+            // Emit a synthetic double_tap Interaction at the same coordinates.
+            // We bypass record() so the move-coalesce + scroll-resolve logic
+            // doesn't double-count work — the cheap path is sufficient since
+            // we just resolved the location above.
+            var scrollOffsetY: CGFloat = 0
+            if let scrollView = findActiveScrollView(in: window) {
+                scrollOffsetY = scrollView.contentOffset.y
+            }
+            let absoluteY = location.y + scrollOffsetY
+            let screen = screenNameProvider()
+            queue.async {
+                self.pendingInteractions.append(Interaction(
+                    type: "double_tap",
+                    x: location.x,
+                    y: location.y,
+                    absoluteY: absoluteY,
+                    scrollOffsetY: scrollOffsetY,
+                    screen: screen,
+                    timestamp: Date()
+                ))
+            }
+            // Reset so a third tap doesn't fire another double-tap.
+            lastTapAt = 0
+            lastTapX = -9999
+            lastTapY = -9999
+        } else {
+            lastTapAt = now
+            lastTapX = location.x
+            lastTapY = location.y
+        }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        // Still .possible — we receive all moves without holding any gate.
+        // Throttle to MOVE_THROTTLE_INTERVAL — drop the rest of the frames in
+        // the current 50ms window so we don't spam the queue with hundreds of
+        // identical samples on a slow drag.
+        let now = CACurrentMediaTime()
+        if now - lastMoveSampleAt < Self.MOVE_THROTTLE_INTERVAL {
+            return
+        }
+        lastMoveSampleAt = now
         record(touches, type: "pointer_move", with: event)
     }
 
@@ -119,7 +210,21 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
         
         let absoluteY = location.y + scrollOffsetY
         let screen = screenNameProvider()
-        
+
+        // Spatial coalesce — drop pointer_move samples that haven't moved
+        // more than MOVE_COALESCE_PX from the previous sample.  Only applies
+        // to "pointer_move"; "pointer_down" and "pointer_up" always get through.
+        if interactionType == "pointer_move" {
+            let dx = location.x - lastMoveX
+            let dy = location.y - lastMoveY
+            if dx * dx + dy * dy <
+                Self.MOVE_COALESCE_PX * Self.MOVE_COALESCE_PX {
+                return
+            }
+            lastMoveX = location.x
+            lastMoveY = location.y
+        }
+
         queue.async {
             self.pendingInteractions.append(Interaction(
                 type: interactionType,

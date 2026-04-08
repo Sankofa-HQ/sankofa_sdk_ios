@@ -70,6 +70,7 @@ final class SankofaReplayUploader {
                     case "pointer_up":   type = 0    // 0 = MouseUp   (rrweb MouseInteraction)
                     case "pointer_move": type = 6    // 6 = TouchMove (rrweb MouseInteraction)
                     case "pinch":        type = 7    // 7 = Pinch/Zoom (midpoint tracking)
+                    case "double_tap":   type = 4    // 4 = DblClick  (rrweb MouseInteraction)
                     default: type = 1
                     }
                     
