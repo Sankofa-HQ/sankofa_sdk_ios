@@ -132,8 +132,18 @@ public final class Sankofa: NSObject {
         
         // Initial session start event
         track("$session_start")
+
+        // ── Unified Handshake (async, non-blocking) ──
+        // One call to /api/v1/handshake returns the server-driven
+        // config for ALL Sankofa products. If the server says replay
+        // is disabled, we stop the capture coordinator. If analytics
+        // is disabled, the server silently drops payloads with 202.
+        // Falls back gracefully if the endpoint doesn't exist yet.
+        Task.detached { [weak self] in
+            self?._fetchHandshake(apiKey: apiKey, endpoint: config.endpoint)
+        }
     }
-    
+
     /// Explicitly tag the screen the user is currently viewing.
     /// Used for heatmaps and behavioral context.
     @objc
@@ -273,7 +283,7 @@ public final class Sankofa: NSObject {
         for cmd in commands {
             guard let type = cmd["type"] as? String,
                   let params = cmd["params"] as? [String: Any] else { continue }
-            
+
             if type == "CAPTURE_PRISTINE", let _ = params["screen"] as? String {
                 logger.log("🔥 📸 Server requested pristine capture")
                 Task { @MainActor in
@@ -281,5 +291,50 @@ public final class Sankofa: NSObject {
                 }
             }
         }
+    }
+
+    // MARK: - Unified Handshake
+
+    private func _fetchHandshake(apiKey: String, endpoint: String) {
+        let urlString = "\(endpoint)/api/v1/handshake"
+        guard let url = URL(string: urlString) else { return }
+
+        var request = URLRequest(url: url)
+        request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.timeoutInterval = 10
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+
+            if let error = error {
+                self.logger.warn("⚠️ Handshake failed: \(error.localizedDescription)")
+                return
+            }
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let modules = json["modules"] as? [String: Any] else {
+                self.logger.log("🤝 Handshake unavailable — continuing with local config")
+                return
+            }
+
+            self.logger.log("🤝 Handshake OK (project: \(json["project_id"] ?? "?"))")
+
+            // Replay: stop capture if server says disabled
+            if let replay = modules["replay"] as? [String: Any],
+               let enabled = replay["enabled"] as? Bool, !enabled {
+                self.logger.log("⏸ Replay disabled by server")
+                Task { @MainActor in
+                    self.captureCoordinator?.stop()
+                }
+            }
+
+            // Deploy: log availability for observability
+            if let deploy = modules["deploy"] as? [String: Any],
+               let hasUpdate = deploy["has_update"] as? Bool, hasUpdate {
+                self.logger.log("📦 Deploy update available: \(deploy["label"] ?? "?")")
+            }
+        }.resume()
     }
 }
