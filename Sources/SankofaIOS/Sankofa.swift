@@ -61,6 +61,10 @@ public final class Sankofa: NSObject {
         self.config = config
         self.isInitialized = true
 
+        // Traffic Cop: flip core-ready so modules registered AFTER this
+        // point don't emit the "registered before initialize()" warning.
+        SankofaModuleRegistry.shared.markCoreInitialized()
+
         self.logger = SankofaLogger(debug: config.debug)
         let qm = SankofaQueueManager(logger: logger)
         self.queueManager = qm
@@ -296,7 +300,12 @@ public final class Sankofa: NSObject {
     // MARK: - Unified Handshake
 
     private func _fetchHandshake(apiKey: String, endpoint: String) {
-        let urlString = "\(endpoint)/api/v1/handshake"
+        // Reverse Handshake: report which modules this binary ships with
+        // so the dashboard can gate UI for modules the SDK lacks.
+        let installed = SankofaModuleRegistry.shared.getInstalledModules().joined(separator: ",")
+        let encoded = installed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? installed
+        let normalized = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
+        let urlString = "\(normalized)/api/v1/handshake?installed=\(encoded)&sdk=ios"
         guard let url = URL(string: urlString) else { return }
 
         var request = URLRequest(url: url)
@@ -319,7 +328,12 @@ public final class Sankofa: NSObject {
                 return
             }
 
-            self.logger.log("🤝 Handshake OK (project: \(json["project_id"] ?? "?"))")
+            self.logger.log("🤝 Handshake OK (project: \(json["project_id"] ?? "?"), installed: \(installed))")
+
+            // Traffic Cop — route enabled flags to registered modules; warn
+            // (debug) or silent no-op (release) for missing modules.
+            // Non-blocking: launches module handlers in detached Tasks.
+            SankofaModuleRegistry.shared.routeHandshake(modules)
 
             // Replay: stop capture if server says disabled
             if let replay = modules["replay"] as? [String: Any],
