@@ -110,22 +110,17 @@ SankofaConfig(
 )
 ```
 
-### Ghost Masking — How it Works
+### Ghost Masking
 
-In Screenshot mode, Sankofa uses Apple's CoreGraphics to render the window into an **in-memory canvas**. Sensitive fields are blacked out in the image buffer **before** compression. The live screen is **never modified**.
-
-> ⚡️ No UI injection. No subview overlays. No black flash. The user's screen remains smooth at all times.
+In Screenshot mode, Sankofa renders frames in-memory and masks sensitive fields before compression. The live screen is never modified — no UI injection, no overlays, no flicker.
 
 ### Manual Privacy Masking
 
 ```swift
 import SankofaIOS
 
-// Mark a view as sensitive (UIView extension)
+// Mark a view as sensitive
 mySecretView.sankofaMask = true
-
-// From Interface Builder / XIB — set tag to 0x5A4B_0001
-mySecretView.tag = 0x5A4B0001
 ```
 
 ---
@@ -155,30 +150,6 @@ mySecretView.tag = 0x5A4B0001
 | `setPerson(name:email:properties:)` | Set profile attributes. |
 | `reset()` | Clear identity and rotate session (call on logout). |
 | `flush()` | Force-upload all queued events immediately. |
-
----
-
-## 🏗 Architecture
-
-```
-SankofaIOS
-├── Sankofa.swift                   # Public singleton entry point
-├── SankofaConfig.swift             # Configuration struct
-├── core/
-│   ├── SankofaQueueManager.swift   # SQLite queue (GRDB.swift)
-│   ├── SankofaFlushManager.swift   # URLSession batch dispatcher
-│   ├── SankofaLifecycleObserver.swift  # NotificationCenter hooks
-│   ├── SankofaIdentity.swift       # anonymous_id / distinct_id
-│   ├── SankofaSessionManager.swift # session_id rotation
-│   └── SankofaDeviceInfo.swift     # Device metadata enrichment
-└── replay/
-    ├── SankofaCaptureEngine.swift      # Protocol
-    ├── SankofaCaptureCoordinator.swift # Strategy-pattern orchestrator
-    ├── SankofaWireframeEngine.swift    # JSON view-tree engine
-    ├── SankofaScreenshotEngine.swift   # Ghost Masking CoreGraphics engine
-    ├── SankofaMask.swift               # UIView.sankofaMask extension
-    └── SankofaReplayUploader.swift     # Chunked frame upload
-```
 
 ---
 
