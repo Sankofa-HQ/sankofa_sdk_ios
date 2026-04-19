@@ -299,9 +299,16 @@ public final class Sankofa: NSObject {
 
     // MARK: - Unified Handshake
 
+    /// Cached modules map + ETag from the last successful handshake.
+    /// The ETag is sent as `If-None-Match` on the next refresh so the
+    /// server can respond with 304 when nothing has changed; the
+    /// cached modules are replayed into the Traffic Cop on that 304
+    /// path so modules that constructed between handshakes still pick
+    /// up the payload they missed.
+    private var cachedHandshakeModules: [String: Any]?
+    private var handshakeEtag: String = ""
+
     private func _fetchHandshake(apiKey: String, endpoint: String) {
-        // Reverse Handshake: report which modules this binary ships with
-        // so the dashboard can gate UI for modules the SDK lacks.
         let installed = SankofaModuleRegistry.shared.getInstalledModules().joined(separator: ",")
         let encoded = installed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? installed
         let normalized = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
@@ -310,6 +317,9 @@ public final class Sankofa: NSObject {
 
         var request = URLRequest(url: url)
         request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
+        if !handshakeEtag.isEmpty {
+            request.addValue(handshakeEtag, forHTTPHeaderField: "If-None-Match")
+        }
         request.timeoutInterval = 10
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
@@ -319,8 +329,18 @@ public final class Sankofa: NSObject {
                 self.logger.warn("⚠️ Handshake failed: \(error.localizedDescription)")
                 return
             }
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200,
+            guard let httpResponse = response as? HTTPURLResponse else { return }
+
+            // 304 — cache still current. Re-route into the Traffic Cop
+            // so modules registered between the previous handshake and
+            // now pick up the payload they missed.
+            if httpResponse.statusCode == 304, let cached = self.cachedHandshakeModules {
+                self.logger.log("🤝 Handshake 304 — cached modules still current")
+                SankofaModuleRegistry.shared.routeHandshake(cached)
+                return
+            }
+
+            guard httpResponse.statusCode == 200,
                   let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let modules = json["modules"] as? [String: Any] else {
@@ -329,10 +349,13 @@ public final class Sankofa: NSObject {
             }
 
             self.logger.log("🤝 Handshake OK (project: \(json["project_id"] ?? "?"), installed: \(installed))")
+            self.cachedHandshakeModules = modules
+            self.handshakeEtag =
+                httpResponse.value(forHTTPHeaderField: "Etag") ??
+                httpResponse.value(forHTTPHeaderField: "ETag") ??
+                ""
 
-            // Traffic Cop — route enabled flags to registered modules; warn
-            // (debug) or silent no-op (release) for missing modules.
-            // Non-blocking: launches module handlers in detached Tasks.
+            // Traffic Cop — route enabled flags to registered modules.
             SankofaModuleRegistry.shared.routeHandshake(modules)
 
             // Replay: stop capture if server says disabled

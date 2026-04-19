@@ -28,6 +28,8 @@ public enum SankofaModuleName: String {
     case analytics
     case deploy
     case catchModule = "catch"
+    case switchModule = "switch"
+    case configModule = "config"
 }
 
 /// Every pluggable module conforms to this. The Core never imports
@@ -124,6 +126,36 @@ public final class SankofaModuleRegistry {
             } else {
                 #if DEBUG
                 print("[Sankofa] Server enabled \"catch\" but SankofaCatch is not linked. Add the Catch SDK to enable crash reporting.")
+                #endif
+            }
+        }
+
+        // Switch — feature flags
+        if let switchCfg = modules["switch"] as? [String: Any],
+           (switchCfg["enabled"] as? Bool) == true {
+            if let mod = lookup(.switchModule) {
+                Task.detached {
+                    await mod.applyHandshake(switchCfg)
+                }
+            } else {
+                #if DEBUG
+                print("[Sankofa] Server enabled \"switch\" but SankofaSwitch is not linked. Construct SankofaSwitch.shared after Sankofa.shared.initialize().")
+                #endif
+            }
+        }
+
+        // Config — remote config (class is SankofaRemoteConfig on iOS
+        // because SankofaConfig is already taken by the init-options
+        // struct in this SDK — see Sources/SankofaIOS/SankofaConfig.swift).
+        if let configCfg = modules["config"] as? [String: Any],
+           (configCfg["enabled"] as? Bool) == true {
+            if let mod = lookup(.configModule) {
+                Task.detached {
+                    await mod.applyHandshake(configCfg)
+                }
+            } else {
+                #if DEBUG
+                print("[Sankofa] Server enabled \"config\" but SankofaRemoteConfig is not linked. Construct SankofaRemoteConfig.shared after Sankofa.shared.initialize().")
                 #endif
             }
         }
