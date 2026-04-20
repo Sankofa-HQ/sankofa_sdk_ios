@@ -327,6 +327,14 @@ public final class Sankofa: NSObject {
         if !did.isEmpty {
             queryItems.append(URLQueryItem(name: "distinct_id", value: did))
         }
+        // Identity stitching — only emit anon_id when identify() has
+        // actually fired (distinctId diverged from anonymousId).
+        // Pre-identify the two ids are equal, so sending both would be
+        // redundant noise on the wire.
+        let anon = identity.anonymousId
+        if !anon.isEmpty && anon != did {
+            queryItems.append(URLQueryItem(name: "anon_id", value: anon))
+        }
         // OS version from UIDevice — always available on iOS.
         #if canImport(UIKit)
         queryItems.append(URLQueryItem(name: "os_version", value: UIDevice.current.systemVersion))
