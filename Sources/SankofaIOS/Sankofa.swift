@@ -312,8 +312,51 @@ public final class Sankofa: NSObject {
         let installed = SankofaModuleRegistry.shared.getInstalledModules().joined(separator: ",")
         let encoded = installed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? installed
         let normalized = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-        let urlString = "\(normalized)/api/v1/handshake?installed=\(encoded)&sdk=ios"
-        guard let url = URL(string: urlString) else { return }
+
+        // Device context — the server's evaluator needs these to
+        // bucket rollouts deterministically, resolve cohort membership,
+        // and honor user allow-lists. Without distinct_id every
+        // handshake looks like a new anonymous user so cohort targeting
+        // can't match and experiments are non-deterministic.
+        var queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "installed", value: installed),
+            URLQueryItem(name: "sdk", value: "ios"),
+            URLQueryItem(name: "platform", value: "ios")
+        ]
+        let did = identity.distinctId
+        if !did.isEmpty {
+            queryItems.append(URLQueryItem(name: "distinct_id", value: did))
+        }
+        // OS version from UIDevice — always available on iOS.
+        #if canImport(UIKit)
+        queryItems.append(URLQueryItem(name: "os_version", value: UIDevice.current.systemVersion))
+        #endif
+        // App version from the host bundle — CFBundleShortVersionString
+        // is the marketing version most apps use (e.g. "1.2.0"), which
+        // matches what the server's semver range compares against.
+        if let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+           !appVersion.isEmpty {
+            queryItems.append(URLQueryItem(name: "app_version", value: appVersion))
+        }
+        // Locale ID like "en_US" — the server accepts the Apple format.
+        let localeID = Locale.current.identifier
+        if !localeID.isEmpty {
+            queryItems.append(URLQueryItem(name: "locale", value: localeID))
+        }
+
+        var components = URLComponents(string: "\(normalized)/api/v1/handshake")
+        components?.queryItems = queryItems
+        // Fallback to the legacy string concat if URLComponents blows
+        // up for some reason — we'd rather ship a partial handshake
+        // than fail the whole init.
+        let url: URL
+        if let built = components?.url {
+            url = built
+        } else {
+            guard let fallback = URL(string: "\(normalized)/api/v1/handshake?installed=\(encoded)&sdk=ios") else { return }
+            url = fallback
+        }
+        _ = encoded // silence unused-warn when the fast path succeeds
 
         var request = URLRequest(url: url)
         request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
