@@ -34,6 +34,14 @@ public final class Sankofa: NSObject {
     private var config: SankofaConfig = SankofaConfig()
     private var apiKey: String = ""
     private var isInitialized = false
+
+    /// The API key passed to initialize(). Empty string until init has run.
+    /// Exposed so sibling modules (Catch, Switch, Config) can authenticate
+    /// their own API calls without the host plumbing credentials twice.
+    public var apiKeyString: String? { apiKey.isEmpty ? nil : apiKey }
+
+    /// The server endpoint passed to initialize(). Nil until init has run.
+    public var endpointString: String? { config.endpoint.isEmpty ? nil : config.endpoint }
     
     /// The current screen name for stateful tagging (Heatmaps).
     private var currentScreen: String = "Unknown"
