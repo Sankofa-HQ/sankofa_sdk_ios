@@ -49,6 +49,29 @@ public final class Sankofa: NSObject {
     private var logger = SankofaLogger(debug: false)
     private var identity = SankofaIdentity()
     private var sessionManager = SankofaSessionManager()
+
+    // MARK: - Public identity accessors
+    //
+    // Exposed for plugin modules (Catch, custom instrumentation) that
+    // need to stamp the same session_id / anonymous_id / distinct_id
+    // on their own events so cross-product joins work in the dashboard
+    // ("this error happened in the same session as this replay").
+    //
+    // Read-only — the SDK is the single writer; mutation goes through
+    // identify() / sessionManager.rotateSession().
+
+    /// The active session identifier. Rotates on app cold start or
+    /// after a period of background-inactivity; check
+    /// `SankofaSessionManager` for the exact policy.
+    public var currentSessionId: String { sessionManager.sessionId }
+
+    /// The device-scoped anonymous identifier. Stable across app
+    /// launches until the user uninstalls.
+    public var anonymousId: String { identity.anonymousId }
+
+    /// The identified user ID from `identify(distinctId:)`, or the
+    /// anonymous ID when no identify call has happened yet.
+    public var distinctId: String { identity.distinctId }
     private var deviceInfo = SankofaDeviceInfo()
     private var queueManager: SankofaQueueManager?
     private var flushManager: SankofaFlushManager?

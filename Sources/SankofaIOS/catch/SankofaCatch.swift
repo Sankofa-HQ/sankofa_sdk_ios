@@ -90,9 +90,94 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             self.startFlushTimer()
             if captureUnhandled {
                 self.installGlobalHandler()
+                // Native-signal handler — writes an async-signal-safe
+                // dump file on SIGSEGV/SIGABRT/SIGBUS/etc, which we
+                // drain on the next launch. Process that was just
+                // killed can't report inline; this is the only way
+                // to see native crashes.
+                CatchSignalHandler.install()
+                self.drainPendingNativeCrashes()
             }
         }
         return self
+    }
+
+    /// Read crash dumps left by previous signal-crash runs and push
+    /// them into the buffer so the next flush ships them. Called
+    /// once per process at start().
+    ///
+    /// Symbols are NOT resolved here — the dump only has raw
+    /// instruction addresses. Server-side symbolication uses the
+    /// per-image `debug_meta` we capture alongside (LC_UUID + text
+    /// vmaddr), which is enough to resolve frames deterministically
+    /// even across ASLR slides.
+    private func drainPendingNativeCrashes() {
+        let dumps = CatchSignalHandler.drainPendingDumps()
+        guard !dumps.isEmpty else { return }
+
+        for dump in dumps {
+            let sigName = Self.signalName(dump.signal)
+            let frames = dump.backtrace.map { addr -> CatchStackFrame in
+                CatchStackFrame(
+                    function: nil,
+                    filename: nil,
+                    lineno: nil,
+                    colno: nil,
+                    in_app: nil,
+                    package: nil,
+                    instruction_addr: String(format: "0x%016llx", addr),
+                    addr_mode: nil
+                )
+            }
+            let exc = CatchException(
+                type: "NativeCrash",
+                value: "\(sigName) (\(dump.signal))",
+                module: nil,
+                mechanism: CatchMechanism(type: "signalhandler", handled: false),
+                stacktrace: CatchStackTrace(frames: frames),
+                chained: nil
+            )
+            let sankofaSDK = Sankofa.shared
+            let event = CatchEvent(
+                event_id: randomID(),
+                ts_ms: dump.timestampSeconds * 1000,
+                environment: environment,
+                level: .fatal,
+                type: "unhandled_exception",
+                platform: "ios",
+                sdk: CatchSDKInfo(name: "sankofa.ios", version: "ios-0.1.0"),
+                exception: exc,
+                message: nil,
+                distinct_id: sankofaSDK.distinctId,
+                anon_id: sankofaSDK.anonymousId,
+                session_id: sankofaSDK.currentSessionId,
+                tags: tags.isEmpty ? nil : tags,
+                user: user,
+                device: buildDeviceContext(),
+                release: releaseName,
+                breadcrumbs: nil,
+                flag_snapshot: nil,
+                config_snapshot: nil,
+                debug_meta: CatchDebugMetaCapture.capture()
+            )
+            buffer.append(event)
+        }
+        persistToStorage()
+    }
+
+    /// Map signal number → readable name for the exception `value`.
+    /// Covers every signal we register in CatchSignalHandler.install().
+    private static func signalName(_ sig: Int32) -> String {
+        switch sig {
+        case SIGSEGV: return "SIGSEGV"
+        case SIGABRT: return "SIGABRT"
+        case SIGBUS:  return "SIGBUS"
+        case SIGILL:  return "SIGILL"
+        case SIGFPE:  return "SIGFPE"
+        case SIGTRAP: return "SIGTRAP"
+        case SIGSYS:  return "SIGSYS"
+        default:      return "SIG\(sig)"
+        }
     }
 
     // MARK: - SankofaPluggableModule
@@ -211,6 +296,11 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
         let (exception, messageValue) = composeExceptionOrMessage(errorOrMessage, mechanism: mechanism)
         let eventID = randomID()
 
+        // Identity correlation. Pulled from the core SDK so a Catch
+        // event lines up with the user's Analytics session + replay
+        // chunk in the dashboard. Failing to read (SDK not initialised)
+        // is fine — server tolerates missing ids.
+        let sankofaSDK = Sankofa.shared
         let event = CatchEvent(
             event_id: eventID,
             ts_ms: Int64(Date().timeIntervalSince1970 * 1000),
@@ -221,9 +311,9 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             sdk: CatchSDKInfo(name: "sankofa.ios", version: "ios-0.1.0"),
             exception: exception,
             message: messageValue,
-            distinct_id: nil,
-            anon_id: nil,
-            session_id: nil,
+            distinct_id: sankofaSDK.distinctId,
+            anon_id: sankofaSDK.anonymousId,
+            session_id: sankofaSDK.currentSessionId,
             tags: mergedTags(options),
             extra: mergedExtra(options),
             user: options.user ?? user,
@@ -444,6 +534,7 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
     }
 
     private func captureInternal(exception: CatchException, type: String) {
+        let sankofaSDK = Sankofa.shared
         let event = CatchEvent(
             event_id: randomID(),
             ts_ms: Int64(Date().timeIntervalSince1970 * 1000),
@@ -454,6 +545,9 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             sdk: CatchSDKInfo(name: "sankofa.ios", version: "ios-0.1.0"),
             exception: exception,
             message: nil,
+            distinct_id: sankofaSDK.distinctId,
+            anon_id: sankofaSDK.anonymousId,
+            session_id: sankofaSDK.currentSessionId,
             tags: tags.isEmpty ? nil : tags,
             user: user,
             device: buildDeviceContext(),
