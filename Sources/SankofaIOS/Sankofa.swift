@@ -72,6 +72,21 @@ public final class Sankofa: NSObject {
     /// The identified user ID from `identify(distinctId:)`, or the
     /// anonymous ID when no identify call has happened yet.
     public var distinctId: String { identity.distinctId }
+
+    /// Session id of the active replay recording, or nil when
+    /// replay is disabled / sampled out / not yet started.
+    ///
+    /// Sibling modules (Pulse) stamp this on submitted responses
+    /// so the dashboard can deep-link from one row to the recorded
+    /// session that produced it. Returns nil instead of an empty
+    /// string — "no replay" is meaningfully different from "replay
+    /// session unknown" and downstream code should be able to tell.
+    @MainActor
+    public var replaySessionId: String? {
+        guard let coordinator = captureCoordinator else { return nil }
+        let sid = coordinator.activeSessionId
+        return sid.isEmpty ? nil : sid
+    }
     private var deviceInfo = SankofaDeviceInfo()
     private var queueManager: SankofaQueueManager?
     private var flushManager: SankofaFlushManager?

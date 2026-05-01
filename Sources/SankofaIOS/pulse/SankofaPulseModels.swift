@@ -204,14 +204,22 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
     public let targetingRules: [SankofaPulseTargetingRule]
     public let branchingRules: [SankofaPulseBranchingRule]
 
+    /// Per-locale string overrides keyed first by BCP-47 locale tag
+    /// (e.g. "en-US"), then by the dot-path key (e.g.
+    /// "question.psq_q1.prompt"). Empty when the survey hasn't been
+    /// translated.
+    public let translations: [String: [String: String]]
+
     public init(
         survey: SankofaPulseSurvey,
         targetingRules: [SankofaPulseTargetingRule] = [],
-        branchingRules: [SankofaPulseBranchingRule] = []
+        branchingRules: [SankofaPulseBranchingRule] = [],
+        translations: [String: [String: String]] = [:]
     ) {
         self.survey = survey
         self.targetingRules = targetingRules
         self.branchingRules = branchingRules
+        self.translations = translations
     }
 
     enum CodingKeys: String, CodingKey {
@@ -219,6 +227,7 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
         case questions
         case targetingRules = "targeting_rules"
         case branchingRules = "branching_rules"
+        case translations
     }
 
     public init(from decoder: Decoder) throws {
@@ -250,6 +259,8 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
             [SankofaPulseTargetingRule].self, forKey: .targetingRules) ?? []
         self.branchingRules = try c.decodeIfPresent(
             [SankofaPulseBranchingRule].self, forKey: .branchingRules) ?? []
+        self.translations = try c.decodeIfPresent(
+            [String: [String: String]].self, forKey: .translations) ?? [:]
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -258,6 +269,7 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
         try c.encode(survey.questions, forKey: .questions)
         try c.encode(targetingRules, forKey: .targetingRules)
         try c.encode(branchingRules, forKey: .branchingRules)
+        try c.encode(translations, forKey: .translations)
     }
 }
 
@@ -327,6 +339,29 @@ public struct SankofaPulseContext: Codable, Sendable {
     public let osVersion: String?
     public let appVersion: String?
     public let locale: String?
+    /// Session id of the active replay recording, when replay is on.
+    /// Lets the dashboard deep-link from a Pulse response straight
+    /// to the recorded session. Nil when replay is disabled,
+    /// sampled out, or not yet started.
+    public let replaySessionId: String?
+
+    public init(
+        sessionId: String? = nil,
+        anonymousId: String? = nil,
+        platform: String? = nil,
+        osVersion: String? = nil,
+        appVersion: String? = nil,
+        locale: String? = nil,
+        replaySessionId: String? = nil
+    ) {
+        self.sessionId = sessionId
+        self.anonymousId = anonymousId
+        self.platform = platform
+        self.osVersion = osVersion
+        self.appVersion = appVersion
+        self.locale = locale
+        self.replaySessionId = replaySessionId
+    }
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -335,6 +370,87 @@ public struct SankofaPulseContext: Codable, Sendable {
         case osVersion = "os_version"
         case appVersion = "app_version"
         case locale
+        case replaySessionId = "replay_session_id"
+    }
+}
+
+/// Wire payload for `POST /api/pulse/partial`. Same answers shape
+/// (map keyed by question_id) as the final-submit body so the SDK
+/// doesn't have to reformat between save + submit.
+public struct SankofaPulsePartialUpsert: Codable, Sendable {
+    public let surveyId: String
+    public let respondent: SankofaPulseRespondent
+    public let context: SankofaPulseContext?
+    public let answers: [String: SankofaPulseAnyJSON]
+    public let currentQuestionId: String?
+
+    public init(
+        surveyId: String,
+        respondent: SankofaPulseRespondent = SankofaPulseRespondent(),
+        context: SankofaPulseContext? = nil,
+        answers: [String: SankofaPulseAnyJSON] = [:],
+        currentQuestionId: String? = nil
+    ) {
+        self.surveyId = surveyId
+        self.respondent = respondent
+        self.context = context
+        self.answers = answers
+        self.currentQuestionId = currentQuestionId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case surveyId = "survey_id"
+        case respondent
+        case context
+        case answers
+        case currentQuestionId = "current_question_id"
+    }
+}
+
+/// Shape returned by `POST /api/pulse/partial`.
+public struct SankofaPulsePartialAck: Codable, Sendable {
+    public let id: String?
+    public let surveyId: String?
+    public let currentQuestionId: String?
+    public let versionNumber: Int?
+    public let expiresAt: String?
+    public let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case surveyId = "survey_id"
+        case currentQuestionId = "current_question_id"
+        case versionNumber = "version_number"
+        case expiresAt = "expires_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+/// Shape returned by `GET /api/pulse/partial`. Mirrors the server's
+/// `ResponsePartial` row.
+public struct SankofaPulsePartial: Codable, Sendable {
+    public let id: String?
+    public let surveyId: String?
+    public let respondentExternalId: String?
+    public let respondentUserId: String?
+    public let respondentEmail: String?
+    public let answers: [String: SankofaPulseAnyJSON]?
+    public let currentQuestionId: String?
+    public let versionNumber: Int?
+    public let expiresAt: String?
+    public let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case surveyId = "survey_id"
+        case respondentExternalId = "respondent_external_id"
+        case respondentUserId = "respondent_user_id"
+        case respondentEmail = "respondent_email"
+        case answers
+        case currentQuestionId = "current_question_id"
+        case versionNumber = "version_number"
+        case expiresAt = "expires_at"
+        case updatedAt = "updated_at"
     }
 }
 
@@ -345,5 +461,52 @@ public struct SankofaPulseSubmitResponse: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id
         case surveyId = "survey_id"
+    }
+}
+
+/// Lifecycle events the SDK fires while a survey is on screen.
+/// Hosts subscribe via `SankofaPulse.shared.on(...)` to wire Pulse
+/// into their own analytics / CRM / replay tooling.
+public enum SankofaPulseEvent: String, Sendable, Hashable {
+    /// Fired right after the survey dialog opens.
+    case surveyShown = "survey_shown"
+    /// Fired when the respondent closes without submitting.
+    case surveyDismissed = "survey_dismissed"
+    /// Fired after a successful submission.
+    case surveyCompleted = "survey_completed"
+    /// Fired after a successful partial-state save.
+    case surveyPartialSaved = "survey_partial_saved"
+}
+
+/// Payload delivered to every Pulse listener. `responseId` is only
+/// populated on `.surveyCompleted`; `reason` is populated on
+/// dismissal when we have one (e.g. eligibility miss).
+public struct SankofaPulseEventPayload: Sendable {
+    public let event: SankofaPulseEvent
+    public let surveyId: String
+    public let responseId: String?
+    public let reason: String?
+
+    public init(
+        event: SankofaPulseEvent,
+        surveyId: String,
+        responseId: String? = nil,
+        reason: String? = nil
+    ) {
+        self.event = event
+        self.surveyId = surveyId
+        self.responseId = responseId
+        self.reason = reason
+    }
+}
+
+/// Token returned by `SankofaPulse.shared.on(...)`. Hold it to keep
+/// the listener alive; call `cancel()` to remove it.
+public final class SankofaPulseSubscription {
+    private var action: (() -> Void)?
+    public init(_ action: @escaping () -> Void) { self.action = action }
+    public func cancel() {
+        action?()
+        action = nil
     }
 }

@@ -39,6 +39,22 @@ public final class SankofaPulse {
     private var registered: Bool = false
     private var cachedSurveys: [SankofaPulseSurvey] = []
 
+    /// In-flight partial-save task. Coalesce on a 750ms debounce so
+    /// a fast-clicking respondent who skips through several questions
+    /// only burns one save call; the latest pending state always wins.
+    private var partialSaveTask: Task<Void, Never>? = nil
+    private let partialSaveDebounceNs: UInt64 = 750_000_000
+
+    /// Lifecycle event listener registry. Per-event buckets so an
+    /// `onCompleted` subscriber doesn't run for `dismissed` events.
+    private var listeners: [SankofaPulseEvent: [UUID: (SankofaPulseEventPayload) -> Void]] = [:]
+    private let listenerLock = NSLock()
+
+    /// Snapshot of the active replay session id, refreshed on the
+    /// MainActor when a survey presents. Cached so the partial-save
+    /// background task can read it without bouncing back to main.
+    private var cachedReplaySessionId: String?
+
     private var apiKey: String? { Sankofa.shared.apiKeyString }
     private var endpoint: String? { Sankofa.shared.endpointString }
 
@@ -64,6 +80,54 @@ public final class SankofaPulse {
     }
 
     // MARK: - Public reads
+
+    // MARK: - Lifecycle event subscriptions
+
+    /// Subscribe to one Pulse lifecycle event. Returns a
+    /// `SankofaPulseSubscription` — call `cancel()` to remove the
+    /// listener. Mirrors the Web SDK's `Sankofa.pulse.on(event,
+    /// listener)` shape so a host swapping between platforms doesn't
+    /// relearn the API.
+    @discardableResult
+    public func on(
+        _ event: SankofaPulseEvent,
+        listener: @escaping (SankofaPulseEventPayload) -> Void
+    ) -> SankofaPulseSubscription {
+        let id = UUID()
+        listenerLock.lock()
+        var bucket = listeners[event] ?? [:]
+        bucket[id] = listener
+        listeners[event] = bucket
+        listenerLock.unlock()
+        return SankofaPulseSubscription { [weak self] in
+            guard let self = self else { return }
+            self.listenerLock.lock()
+            self.listeners[event]?.removeValue(forKey: id)
+            if self.listeners[event]?.isEmpty == true {
+                self.listeners.removeValue(forKey: event)
+            }
+            self.listenerLock.unlock()
+        }
+    }
+
+    private func emit(_ payload: SankofaPulseEventPayload) {
+        // Auto-emit into the host's analytics queue with a "$pulse."
+        // prefix so survey lifecycle shows up in the same dashboard
+        // / warehouse as every other event the host tracks. Listeners
+        // registered through on(...) still fire as well — that path
+        // is for in-process integrations (Slack pings, conditional
+        // UI), not for analytics.
+        var trackProps: [String: Any] = ["survey_id": payload.surveyId]
+        if let rid = payload.responseId { trackProps["response_id"] = rid }
+        if let reason = payload.reason { trackProps["reason"] = reason }
+        Sankofa.shared.track(
+            "$pulse.\(payload.event.rawValue)", properties: trackProps)
+
+        listenerLock.lock()
+        let snapshot = listeners[payload.event]?.values.map { $0 } ?? []
+        listenerLock.unlock()
+        for l in snapshot { l(payload) }
+    }
 
     /// Refreshes the cached survey list from the server. Called
     /// automatically on register() and after a successful submit.
@@ -134,11 +198,30 @@ public final class SankofaPulse {
                 properties: properties,
                 flags: flags)
             guard decision.eligible else { return }
+
+            // Hydrate from any in-progress partial. Load failures
+            // (offline, expired, server error) are swallowed — the
+            // survey simply starts fresh, which is strictly better
+            // than refusing to show.
+            let externalId = Sankofa.shared.distinctId
+            var partial: SankofaPulsePartial? = nil
+            if !externalId.isEmpty {
+                partial = try? await client.loadPartial(
+                    surveyId: surveyId, externalId: externalId)
+            }
+
+            let translator = SankofaPulseTranslator.build(
+                bundle.translations,
+                deviceLocale: Locale.current.identifier)
             await MainActor.run {
                 if presenter.view.window != nil {
                     self.present(
                         survey: bundle.survey,
                         branchingRules: bundle.branchingRules,
+                        translator: translator,
+                        externalId: externalId,
+                        initialAnswers: partial?.answers ?? [:],
+                        initialQuestionId: partial?.currentQuestionId,
                         from: presenter)
                 }
             }
@@ -190,25 +273,84 @@ public final class SankofaPulse {
             surveyId: surveyId,
             respondentExternalId: distinct,
             userProperties: properties,
-            flagValues: flags)
+            flagValues: mergeWithSwitchFlags(flags))
         return SankofaPulseTargeting.evaluate(rules: rules, context: ctx)
+    }
+
+    /// Merge SankofaSwitch flag values into the eligibility context
+    /// so feature_flag rules can target without the host re-passing
+    /// every flag. Host-supplied `overrides` win over Switch values
+    /// by key — that lets a host force a flag for testing without
+    /// the runtime Switch decision overriding them.
+    private func mergeWithSwitchFlags(
+        _ overrides: [String: SankofaPulseAnyJSON]
+    ) -> [String: SankofaPulseAnyJSON] {
+        var merged: [String: SankofaPulseAnyJSON] = [:]
+        // Walk every known Switch key; SankofaSwitch returns an empty
+        // list before init, which is exactly the no-op we want.
+        for key in SankofaSwitch.shared.getAllKeys() {
+            guard let decision = SankofaSwitch.shared.getDecision(key) else { continue }
+            // For variant flags we expose the variant string; for
+            // boolean flags we expose the bool value. The targeting
+            // evaluator's jsonEqual handles either.
+            if !decision.variant.isEmpty {
+                merged[key] = .string(decision.variant)
+            } else {
+                merged[key] = .bool(decision.value)
+            }
+        }
+        for (k, v) in overrides { merged[k] = v }
+        return merged
     }
 
     @MainActor
     private func present(
         survey: SankofaPulseSurvey,
         branchingRules: [SankofaPulseBranchingRule] = [],
+        translator: SankofaPulseTranslator? = nil,
+        externalId: String = "",
+        initialAnswers: [String: SankofaPulseAnyJSON] = [:],
+        initialQuestionId: String? = nil,
         from presenter: UIViewController
     ) {
+        let surveyId = survey.id
         let onSubmit: (SankofaPulseSubmitPayload) -> Void = { [weak self] payload in
-            self?.handleSubmit(payload: payload, presenter: presenter)
+            self?.handleSubmit(
+                payload: payload, presenter: presenter, surveyId: surveyId)
+            // Server auto-deletes the partial on a successful insert.
+            // Best-effort client-side delete too so a dismissed-then-
+            // resumed-in-a-different-session doesn't surface a stale
+            // partial during the brief window.
+            if !externalId.isEmpty {
+                self?.deletePartialAsync(surveyId: surveyId, externalId: externalId)
+            }
         }
-        let onDismiss: () -> Void = { [weak presenter] in
+        let onDismiss: () -> Void = { [weak self, weak presenter] in
+            self?.emit(SankofaPulseEventPayload(
+                event: .surveyDismissed, surveyId: surveyId))
+            // Keep the partial intact for resume — that's the point.
             presenter?.dismiss(animated: true)
+        }
+        let onProgress: ((_ answers: [String: SankofaPulseAnyJSON],
+                          _ currentQuestionId: String) -> Void)?
+        if externalId.isEmpty {
+            onProgress = nil
+        } else {
+            onProgress = { [weak self] answers, currentQuestionId in
+                self?.schedulePartialSave(
+                    surveyId: surveyId,
+                    externalId: externalId,
+                    answers: answers,
+                    currentQuestionId: currentQuestionId)
+            }
         }
         let view = SankofaSurveyView(
             survey: survey,
             branchingRules: branchingRules,
+            translator: translator,
+            initialAnswers: initialAnswers,
+            initialQuestionId: initialQuestionId,
+            onProgress: onProgress,
             onSubmit: onSubmit,
             onDismiss: onDismiss)
         let host = UIHostingController(rootView: view)
@@ -222,7 +364,15 @@ public final class SankofaPulse {
                 sheet.prefersGrabberVisible = true
             }
         }
+        // Snapshot the replay session id while we're on the main
+        // actor so the partial-save background task can read it
+        // without re-hopping. We refresh again on every present so
+        // long-lived SankofaPulse instances pick up replay-restart.
+        cachedReplaySessionId = Sankofa.shared.replaySessionId
+
         presenter.present(host, animated: true)
+        emit(SankofaPulseEventPayload(
+            event: .surveyShown, surveyId: surveyId))
     }
     #endif
 
@@ -230,12 +380,19 @@ public final class SankofaPulse {
 
     private func handleSubmit(
         payload: SankofaPulseSubmitPayload,
-        presenter: AnyObject?
+        presenter: AnyObject?,
+        surveyId: String
     ) {
         Task { [weak self] in
             guard let self = self, let client = self.client else { return }
             do {
-                _ = try await client.submit(self.enrichContext(payload))
+                let resp = try await client.submit(self.enrichContext(payload))
+                // Fire SURVEY_COMPLETED with the server-issued response
+                // id so hosts can correlate against dashboard rows.
+                self.emit(SankofaPulseEventPayload(
+                    event: .surveyCompleted,
+                    surveyId: surveyId,
+                    responseId: resp.id))
                 await MainActor.run {
                     #if canImport(UIKit)
                     (presenter as? UIViewController)?.dismiss(animated: true)
@@ -255,14 +412,6 @@ public final class SankofaPulse {
 
     private func enrichContext(_ payload: SankofaPulseSubmitPayload)
     -> SankofaPulseSubmitPayload {
-        let context = SankofaPulseContext(
-            sessionId: Sankofa.shared.currentSessionId,
-            anonymousId: Sankofa.shared.anonymousId,
-            platform: "ios",
-            osVersion: deviceOS(),
-            appVersion: appVersion(),
-            locale: Locale.current.identifier
-        )
         let distinct = Sankofa.shared.distinctId
         let respondent = SankofaPulseRespondent(
             userId: payload.respondent.userId,
@@ -273,10 +422,69 @@ public final class SankofaPulse {
         return SankofaPulseSubmitPayload(
             surveyId: payload.surveyId,
             respondent: respondent,
-            context: context,
+            context: buildPulseContext(),
             submittedAt: payload.submittedAt,
             answers: payload.answers
         )
+    }
+
+    /// Build the per-call context used by both the final submit
+    /// payload and any partial-save calls. Centralising here keeps
+    /// "what we tell the server about this device" in one place —
+    /// drift between submit + partial would surface as inconsistent
+    /// dashboard rows for the same respondent.
+    private func buildPulseContext() -> SankofaPulseContext {
+        SankofaPulseContext(
+            sessionId: Sankofa.shared.currentSessionId,
+            anonymousId: Sankofa.shared.anonymousId,
+            platform: "ios",
+            osVersion: deviceOS(),
+            appVersion: appVersion(),
+            locale: Locale.current.identifier,
+            replaySessionId: cachedReplaySessionId
+        )
+    }
+
+    /// Schedule a debounced partial save. Cancels any in-flight
+    /// save — old state is strictly stale.
+    private func schedulePartialSave(
+        surveyId: String,
+        externalId: String,
+        answers: [String: SankofaPulseAnyJSON],
+        currentQuestionId: String
+    ) {
+        partialSaveTask?.cancel()
+        partialSaveTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: self?.partialSaveDebounceNs ?? 750_000_000)
+            } catch {
+                return
+            }
+            guard let self = self, let client = self.client else { return }
+            let payload = SankofaPulsePartialUpsert(
+                surveyId: surveyId,
+                respondent: SankofaPulseRespondent(externalId: externalId),
+                context: self.buildPulseContext(),
+                answers: answers,
+                currentQuestionId: currentQuestionId
+            )
+            do {
+                _ = try await client.savePartial(payload)
+                self.emit(SankofaPulseEventPayload(
+                    event: .surveyPartialSaved, surveyId: surveyId))
+            } catch {
+                // Swallow — partial save failures don't block the
+                // respondent. The next save attempt will retry, and
+                // worst case the host's resume window narrows.
+            }
+        }
+    }
+
+    private func deletePartialAsync(surveyId: String, externalId: String) {
+        Task { [weak self] in
+            try? await self?.client?.deletePartial(
+                surveyId: surveyId, externalId: externalId)
+        }
     }
 
     private func drainQueue() async {

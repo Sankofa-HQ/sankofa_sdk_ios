@@ -1,13 +1,13 @@
 import Foundation
 
-/// Network client for the Pulse SDK. Three endpoints today:
+/// Network client for the Pulse SDK. Six endpoints today:
 ///
-///   - GET  /api/pulse/handshake          → lightweight survey list
-///   - GET  /api/pulse/surveys/:survey_id → full bundle (questions +
-///                                          targeting + branching +
-///                                          theme + translations +
-///                                          partial state)
-///   - POST /api/pulse/responses          → final submit
+///   - GET    /api/pulse/handshake          → lightweight survey list
+///   - GET    /api/pulse/surveys/:survey_id → full bundle
+///   - POST   /api/pulse/responses          → final submit
+///   - POST   /api/pulse/partial            → save in-progress state
+///   - GET    /api/pulse/partial            → load in-progress state
+///   - DELETE /api/pulse/partial            → clear in-progress state
 ///
 /// All authenticated via `x-api-key` (the project API key the host
 /// passed to `Sankofa.shared.initialize`). Network failures bubble
@@ -72,6 +72,75 @@ public final class SankofaPulseClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try encoder.encode(payload)
         return try await perform(req, decode: SankofaPulseSubmitResponse.self)
+    }
+
+    /// Upsert the in-progress partial for (survey_id, external_id).
+    public func savePartial(_ payload: SankofaPulsePartialUpsert)
+    async throws -> SankofaPulsePartialAck {
+        var req = try buildRequest(path: "/api/pulse/partial", method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try encoder.encode(payload)
+        return try await perform(req, decode: SankofaPulsePartialAck.self)
+    }
+
+    /// Load the partial for (survey_id, external_id). Returns nil
+    /// on 404 — distinguishes a clean miss from a network failure,
+    /// which still throws.
+    public func loadPartial(surveyId: String, externalId: String)
+    async throws -> SankofaPulsePartial? {
+        guard !endpoint.isEmpty else { throw ClientError.notInitialized }
+        var components = URLComponents(string: endpoint + "/api/pulse/partial")
+        components?.queryItems = [
+            URLQueryItem(name: "survey_id", value: surveyId),
+            URLQueryItem(name: "external_id", value: externalId),
+        ]
+        guard let url = components?.url else { throw ClientError.malformedURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ClientError.http(status: 0, body: nil)
+        }
+        if http.statusCode == 404 { return nil }
+        if !(200..<300).contains(http.statusCode) {
+            throw ClientError.http(
+                status: http.statusCode,
+                body: String(data: data, encoding: .utf8))
+        }
+        do {
+            return try decoder.decode(SankofaPulsePartial.self, from: data)
+        } catch {
+            throw ClientError.decode(error)
+        }
+    }
+
+    /// Idempotent clear of the partial for (survey_id, external_id).
+    /// The server also auto-cleans on successful submit, so the SDK
+    /// only calls this on explicit dismiss / "start over".
+    public func deletePartial(surveyId: String, externalId: String) async throws {
+        guard !endpoint.isEmpty else { throw ClientError.notInitialized }
+        var components = URLComponents(string: endpoint + "/api/pulse/partial")
+        components?.queryItems = [
+            URLQueryItem(name: "survey_id", value: surveyId),
+            URLQueryItem(name: "external_id", value: externalId),
+        ]
+        guard let url = components?.url else { throw ClientError.malformedURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ClientError.http(status: 0, body: nil)
+        }
+        if http.statusCode == 404 { return }
+        if !(200..<300).contains(http.statusCode) {
+            throw ClientError.http(
+                status: http.statusCode,
+                body: String(data: data, encoding: .utf8))
+        }
     }
 
     // MARK: - Internals

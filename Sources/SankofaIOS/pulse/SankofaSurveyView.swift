@@ -13,6 +13,11 @@ public struct SankofaSurveyView: View {
     public init(
         survey: SankofaPulseSurvey,
         branchingRules: [SankofaPulseBranchingRule] = [],
+        translator: SankofaPulseTranslator? = nil,
+        initialAnswers: [String: SankofaPulseAnyJSON] = [:],
+        initialQuestionId: String? = nil,
+        onProgress: ((_ answers: [String: SankofaPulseAnyJSON],
+                      _ currentQuestionId: String) -> Void)? = nil,
         onSubmit: @escaping (SankofaPulseSubmitPayload) -> Void,
         onDismiss: @escaping () -> Void
     ) {
@@ -20,6 +25,10 @@ public struct SankofaSurveyView: View {
             wrappedValue: SankofaSurveyCoordinator(
                 survey: survey,
                 branchingRules: branchingRules,
+                translator: translator,
+                initialAnswers: initialAnswers,
+                initialQuestionId: initialQuestionId,
+                onProgress: onProgress,
                 onSubmit: onSubmit,
                 onDismiss: onDismiss))
     }
@@ -29,53 +38,172 @@ public struct SankofaSurveyView: View {
             header
             ScrollView {
                 if let q = coordinator.currentQuestion {
-                    QuestionView(question: q,
-                                 valueBinding: coordinator.binding(for: q))
+                    QuestionView(
+                        question: q,
+                        translator: coordinator.translator,
+                        valueBinding: coordinator.binding(for: q))
                         .padding(.horizontal)
+                        .foregroundColor(themeForeground)
                 }
             }
             footer
         }
         .padding(.vertical, 16)
-        .background(Color(.systemBackground))
+        .background(themeBackground)
+        .environment(\.font, themeFont)
+        // Flip the entire dialog tree into right-to-left reading
+        // order when the resolved translation locale is RTL — even
+        // if the host's app is LTR. Mirrors the Web SDK's `dir="rtl"`.
+        .environment(\.layoutDirection,
+            sankofaPulseLocaleIsRTL(coordinator.translator?.locale)
+                ? .rightToLeft : .leftToRight)
+    }
+
+    // ── Theme resolution ───────────────────────────────────────
+    //
+    // We honour the seven theme fields on SankofaPulseTheme:
+    //   primary_color    → accent (buttons, highlights)
+    //   background_color → dialog background
+    //   foreground_color → primary text
+    //   muted_color      → secondary text + close button
+    //   border_color     → input outlines (where applicable)
+    //   font_family      → environment .font
+    //   dark_mode        → "auto" / "light" / "dark"
+
+    private var isDarkPalette: Bool {
+        switch coordinator.survey.theme?.darkMode?.lowercased() {
+        case "dark": return true
+        case "light": return false
+        default:
+            #if canImport(UIKit)
+            return UITraitCollection.current.userInterfaceStyle == .dark
+            #else
+            return false
+            #endif
+        }
+    }
+
+    private var themeAccent: Color {
+        parseHex(coordinator.survey.theme?.primaryColor)
+            ?? (isDarkPalette ? Color(red: 0.984, green: 0.443, blue: 0.522)
+                              : Color(red: 0.957, green: 0.247, blue: 0.369))
+    }
+
+    private var themeBackground: Color {
+        parseHex(coordinator.survey.theme?.backgroundColor)
+            ?? (isDarkPalette ? Color(red: 0.039, green: 0.039, blue: 0.039)
+                              : Color.white)
+    }
+
+    private var themeForeground: Color {
+        parseHex(coordinator.survey.theme?.foregroundColor)
+            ?? (isDarkPalette ? Color(red: 0.98, green: 0.98, blue: 0.98)
+                              : Color(red: 0.094, green: 0.094, blue: 0.106))
+    }
+
+    private var themeMuted: Color {
+        parseHex(coordinator.survey.theme?.mutedColor)
+            ?? (isDarkPalette ? Color(red: 0.631, green: 0.631, blue: 0.667)
+                              : Color(red: 0.443, green: 0.443, blue: 0.478))
+    }
+
+    private var themeFont: Font? {
+        if let family = coordinator.survey.theme?.fontFamily, !family.isEmpty {
+            return .custom(family, size: UIFont.systemFontSize)
+        }
+        return nil
+    }
+
+    private func parseHex(_ hex: String?) -> Color? {
+        guard let raw = hex else { return nil }
+        let cleaned = raw.replacingOccurrences(of: "#", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        guard cleaned.count == 6 || cleaned.count == 8 else { return nil }
+        let scanner = Scanner(string: cleaned)
+        var hexInt: UInt64 = 0
+        guard scanner.scanHexInt64(&hexInt) else { return nil }
+        let a, r, g, b: UInt64
+        if cleaned.count == 8 {
+            a = (hexInt & 0xFF000000) >> 24
+            r = (hexInt & 0x00FF0000) >> 16
+            g = (hexInt & 0x0000FF00) >> 8
+            b = hexInt & 0x000000FF
+        } else {
+            a = 0xFF
+            r = (hexInt & 0xFF0000) >> 16
+            g = (hexInt & 0x00FF00) >> 8
+            b = hexInt & 0x0000FF
+        }
+        return Color(.sRGB,
+            red: Double(r) / 255.0,
+            green: Double(g) / 255.0,
+            blue: Double(b) / 255.0,
+            opacity: Double(a) / 255.0)
     }
 
     @ViewBuilder
     private var header: some View {
-        HStack {
+        HStack(alignment: .top, spacing: 8) {
+            if let urlString = coordinator.survey.theme?.logoURL,
+               let url = URL(string: urlString),
+               !urlString.isEmpty {
+                // 24pt logo block alongside the survey title. We use
+                // AsyncImage on iOS 15+; on iOS 14 we silently skip
+                // (no good fallback without a third-party image lib).
+                if #available(iOS 15.0, macCatalyst 15.0, macOS 12.0, *) {
+                    AsyncImage(url: url) { image in
+                        image.resizable().scaledToFit()
+                    } placeholder: {
+                        Color.clear
+                    }
+                    .frame(width: 24, height: 24)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
             VStack(alignment: .leading, spacing: 4) {
-                Text(coordinator.survey.name)
+                Text(coordinator.translator?.surveyName(coordinator.survey)
+                     ?? coordinator.survey.name)
                     .font(.headline)
-                if let desc = coordinator.survey.description, !desc.isEmpty {
+                    .foregroundColor(themeForeground)
+                if let desc = coordinator.translator?.surveyDescription(coordinator.survey)
+                                ?? coordinator.survey.description,
+                   !desc.isEmpty {
                     Text(desc)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(themeMuted)
                 }
             }
             Spacer()
             Button(action: { coordinator.dismiss() }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(themeMuted)
                     .padding(8)
             }
             .accessibilityLabel("Close survey")
         }
         .padding(.horizontal)
         ProgressView(value: coordinator.progress)
+            .accentColor(themeAccent)
             .padding(.horizontal)
     }
 
     @ViewBuilder
     private var footer: some View {
         if let error = coordinator.errorMessage {
-            Text(error).font(.caption).foregroundColor(.red).padding(.horizontal)
+            // Error red is intentionally NOT theme-resolved — it
+            // must always be unmistakable as an error, not blend
+            // with the brand.
+            let errorColor = isDarkPalette
+                ? Color(red: 0.984, green: 0.647, blue: 0.647)
+                : Color(red: 0.863, green: 0.149, blue: 0.149)
+            Text(error).font(.caption).foregroundColor(errorColor).padding(.horizontal)
         }
         HStack {
             Button(coordinator.canGoBack ? "Back" : "Cancel") {
                 coordinator.canGoBack ? coordinator.previous() : coordinator.dismiss()
             }
-            .foregroundColor(.secondary)
+            .foregroundColor(themeMuted)
             Spacer()
             primarySubmitButton
         }
@@ -93,9 +221,11 @@ public struct SankofaSurveyView: View {
         if #available(iOS 15.0, macCatalyst 15.0, macOS 12.0, *) {
             Button(title, action: action)
                 .buttonStyle(.borderedProminent)
+                .tint(themeAccent)
                 .disabled(coordinator.isSubmitting)
         } else {
             Button(title, action: action)
+                .foregroundColor(themeAccent)
                 .disabled(coordinator.isSubmitting)
         }
     }
@@ -112,6 +242,9 @@ final class SankofaSurveyCoordinator: ObservableObject {
 
     let survey: SankofaPulseSurvey
     let branchingRules: [SankofaPulseBranchingRule]
+    let translator: SankofaPulseTranslator?
+    let onProgress: ((_ answers: [String: SankofaPulseAnyJSON],
+                      _ currentQuestionId: String) -> Void)?
     let onSubmit: (SankofaPulseSubmitPayload) -> Void
     let onDismiss: () -> Void
 
@@ -123,6 +256,11 @@ final class SankofaSurveyCoordinator: ObservableObject {
     init(
         survey: SankofaPulseSurvey,
         branchingRules: [SankofaPulseBranchingRule] = [],
+        translator: SankofaPulseTranslator? = nil,
+        initialAnswers: [String: SankofaPulseAnyJSON] = [:],
+        initialQuestionId: String? = nil,
+        onProgress: ((_ answers: [String: SankofaPulseAnyJSON],
+                      _ currentQuestionId: String) -> Void)? = nil,
         onSubmit: @escaping (SankofaPulseSubmitPayload) -> Void,
         onDismiss: @escaping () -> Void
     ) {
@@ -133,8 +271,15 @@ final class SankofaSurveyCoordinator: ObservableObject {
             id: survey.id, kind: survey.kind, name: survey.name,
             description: survey.description, questions: sorted, theme: survey.theme)
         self.branchingRules = branchingRules
+        self.translator = translator
+        self.onProgress = onProgress
         self.onSubmit = onSubmit
         self.onDismiss = onDismiss
+        self.values = initialAnswers
+        if let initialId = initialQuestionId,
+           let target = sorted.firstIndex(where: { $0.id == initialId }) {
+            self.currentIndex = target
+        }
     }
 
     var currentQuestion: SankofaPulseQuestion? {
@@ -178,6 +323,7 @@ final class SankofaSurveyCoordinator: ObservableObject {
                 where: { $0.id == outcome.nextQuestionId }) {
                 history.append(currentIndex)
                 currentIndex = target
+                emitProgress()
                 return
             }
             // Target id not found in this survey — fall through
@@ -188,7 +334,13 @@ final class SankofaSurveyCoordinator: ObservableObject {
         if currentIndex < survey.questions.count - 1 {
             history.append(currentIndex)
             currentIndex += 1
+            emitProgress()
         }
+    }
+
+    private func emitProgress() {
+        guard let cb = onProgress, let q = currentQuestion else { return }
+        cb(values, q.id)
     }
     func previous() {
         if let prev = history.popLast() { currentIndex = prev }
@@ -234,20 +386,39 @@ final class SankofaSurveyCoordinator: ObservableObject {
 @available(iOS 14.0, macOS 11.0, *)
 struct QuestionView: View {
     let question: SankofaPulseQuestion
+    let translator: SankofaPulseTranslator?
     @Binding var valueBinding: SankofaPulseAnyJSON?
+
+    init(
+        question: SankofaPulseQuestion,
+        translator: SankofaPulseTranslator? = nil,
+        valueBinding: Binding<SankofaPulseAnyJSON?>
+    ) {
+        self.question = question
+        self.translator = translator
+        self._valueBinding = valueBinding
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(question.prompt)
+            Text(translator?.questionPrompt(question) ?? question.prompt)
                 .font(.body)
                 .fontWeight(.medium)
-            if let h = question.helptext, !h.isEmpty {
+            if let h = translator?.questionHelptext(question) ?? question.helptext,
+               !h.isEmpty {
                 Text(h)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             input
         }
+    }
+
+    /// Build a per-question option label resolver. Returns the
+    /// translated label when a translator is set; otherwise the
+    /// source `option.label` straight from the survey row.
+    private func labelFor(_ option: SankofaPulseQuestionOption) -> String {
+        translator?.optionLabel(question, option) ?? option.label
     }
 
     @ViewBuilder
@@ -258,17 +429,17 @@ struct QuestionView: View {
         case .number:    NumberInput(value: $valueBinding, validation: question.validation)
         case .nps:       NPSInput(value: $valueBinding)
         case .rating:    RatingInput(value: $valueBinding, validation: question.validation)
-        case .single:    SingleInput(value: $valueBinding, options: question.options ?? [])
-        case .multi:     MultiInput(value: $valueBinding, options: question.options ?? [])
+        case .single:    SingleInput(value: $valueBinding, options: question.options ?? [], labelFor: labelFor)
+        case .multi:     MultiInput(value: $valueBinding, options: question.options ?? [], labelFor: labelFor)
         case .boolean:   BooleanInput(value: $valueBinding)
         case .slider:    SliderInput(value: $valueBinding, validation: question.validation)
         case .date:      DateInput(value: $valueBinding)
         case .statement: EmptyView()
-        case .ranking:   RankingInput(value: $valueBinding, options: question.options ?? [])
+        case .ranking:   RankingInput(value: $valueBinding, options: question.options ?? [], labelFor: labelFor)
         case .matrix:    MatrixInput(value: $valueBinding, validation: question.validation)
         case .consent:   ConsentInput(value: $valueBinding)
-        case .imageChoice: SingleInput(value: $valueBinding, options: question.options ?? [])
-        case .maxdiff:   MaxDiffInput(value: $valueBinding, options: question.options ?? [])
+        case .imageChoice: SingleInput(value: $valueBinding, options: question.options ?? [], labelFor: labelFor)
+        case .maxdiff:   MaxDiffInput(value: $valueBinding, options: question.options ?? [], labelFor: labelFor)
         case .signature: SignatureInput(value: $valueBinding)
         case .file:      FilePlaceholder()
         case .payment:   PaymentPlaceholder()
@@ -388,6 +559,7 @@ private struct RatingInput: View {
 private struct SingleInput: View {
     @Binding var value: SankofaPulseAnyJSON?
     let options: [SankofaPulseQuestionOption]
+    let labelFor: (SankofaPulseQuestionOption) -> String
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(options, id: \.key) { opt in
@@ -397,7 +569,7 @@ private struct SingleInput: View {
                               ? "largecircle.fill.circle" : "circle")
                             .foregroundColor(value?.stringValue == opt.key
                                              ? .accentColor : .secondary)
-                        Text(opt.label)
+                        Text(labelFor(opt))
                         Spacer()
                     }
                     .padding(.vertical, 6)
@@ -412,6 +584,7 @@ private struct SingleInput: View {
 private struct MultiInput: View {
     @Binding var value: SankofaPulseAnyJSON?
     let options: [SankofaPulseQuestionOption]
+    let labelFor: (SankofaPulseQuestionOption) -> String
 
     private var selected: Set<String> {
         guard case .array(let arr) = value else { return [] }
@@ -427,7 +600,7 @@ private struct MultiInput: View {
                               ? "checkmark.square.fill" : "square")
                             .foregroundColor(selected.contains(opt.key)
                                              ? .accentColor : .secondary)
-                        Text(opt.label)
+                        Text(labelFor(opt))
                         Spacer()
                     }
                     .padding(.vertical, 6)
@@ -509,11 +682,12 @@ private struct ConsentInput: View {
 private struct RankingInput: View {
     @Binding var value: SankofaPulseAnyJSON?
     let options: [SankofaPulseQuestionOption]
+    let labelFor: (SankofaPulseQuestionOption) -> String
     @State private var ordered: [SankofaPulseQuestionOption] = []
     var body: some View {
         List {
             ForEach(ordered, id: \.key) { opt in
-                Text(opt.label)
+                Text(labelFor(opt))
             }
             .onMove { indices, dest in
                 ordered.move(fromOffsets: indices, toOffset: dest)
@@ -592,6 +766,7 @@ private struct MatrixInput: View {
 private struct MaxDiffInput: View {
     @Binding var value: SankofaPulseAnyJSON?
     let options: [SankofaPulseQuestionOption]
+    let labelFor: (SankofaPulseQuestionOption) -> String
     @State private var best: String = ""
     @State private var worst: String = ""
     var body: some View {
@@ -607,7 +782,7 @@ private struct MaxDiffInput: View {
                         Image(systemName: best == opt.key ? "largecircle.fill.circle" : "circle")
                             .foregroundColor(best == opt.key ? .accentColor : .secondary)
                     }.buttonStyle(.plain).disabled(worst == opt.key)
-                    Text(opt.label).frame(maxWidth: .infinity)
+                    Text(labelFor(opt)).frame(maxWidth: .infinity)
                     Button(action: { setWorst(opt.key) }) {
                         Image(systemName: worst == opt.key ? "largecircle.fill.circle" : "circle")
                             .foregroundColor(worst == opt.key ? .red : .secondary)

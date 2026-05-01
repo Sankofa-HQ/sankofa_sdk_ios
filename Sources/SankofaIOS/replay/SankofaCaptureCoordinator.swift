@@ -14,6 +14,13 @@ final class SankofaCaptureCoordinator {
     private let captureScale: CGFloat
     let uploader: SankofaReplayUploader
     private var sessionId: String = ""
+
+    /// Sibling-module accessor for the active replay session id.
+    /// Returns the empty string when start() hasn't been called yet
+    /// (replay sampled out, recordSessions=false, or pre-handshake);
+    /// callers like SankofaPulse map empty → nil on the wire so
+    /// "no recording" is distinguishable from "replay session unknown".
+    var activeSessionId: String { sessionId }
     private var screenNameProvider: () -> String = { "Unknown" }
 
     // MARK: - Engine

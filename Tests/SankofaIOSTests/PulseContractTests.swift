@@ -45,6 +45,67 @@ final class PulseContractTests: XCTestCase {
         try assertStructurallyEqual(golden, produced, path: "$")
     }
 
+    func testPulseSubmitAnonymousMatchesGolden() throws {
+        // Fully anonymous: no respondent ids, minimal context. Catches
+        // regressions where the SDK fabricates empty strings for
+        // missing identity fields rather than omitting them.
+        let golden = try readGolden("pulse_submit_anonymous.json")
+        let payload = SankofaPulseSubmitPayload(
+            surveyId: "psv_anon_001",
+            respondent: SankofaPulseRespondent(),
+            context: SankofaPulseContext(platform: "contract-test"),
+            submittedAt: nil,
+            answers: ["q1": .string("anonymous")]
+        )
+        let data = try JSONEncoder().encode(payload)
+        let produced = try JSONSerialization.jsonObject(with: data)
+        try assertStructurallyEqual(golden, produced, path: "$")
+    }
+
+    func testPulseSubmitAllAnswerKindsMatchesGolden() throws {
+        // Every supported answer value type encoded into a single
+        // payload — catches encoder regressions that only affect a
+        // specific kind.
+        let golden = try readGolden("pulse_submit_all_answer_kinds.json")
+        let payload = SankofaPulseSubmitPayload(
+            surveyId: "psv_kinds_001",
+            respondent: SankofaPulseRespondent(externalId: "ext_42"),
+            context: SankofaPulseContext(
+                platform: "contract-test",
+                replaySessionId: "rep_abc"),
+            submittedAt: nil,
+            answers: [
+                "short_text": .string("hello"),
+                "long_text": .string("the app feels slow when I open the cart screen"),
+                "number": .int(42),
+                "rating": .int(4),
+                "nps": .int(9),
+                "single": .string("key_pro"),
+                "multi": .array([.string("key_a"), .string("key_c")]),
+                "boolean": .bool(true),
+                "slider": .int(75),
+                "date": .string("2026-05-01"),
+                "ranking": .array([
+                    .string("key_b"), .string("key_a"), .string("key_c"),
+                ]),
+                "matrix": .object([
+                    "row_a": .string("col_x"),
+                    "row_b": .string("col_y"),
+                ]),
+                "consent": .bool(true),
+                "image_choice": .string("key_blue"),
+                "maxdiff": .object([
+                    "best": .string("key_a"),
+                    "worst": .string("key_c"),
+                ]),
+                "signature": .string("data:image/png;base64,iVBORw0KGgo="),
+            ]
+        )
+        let data = try JSONEncoder().encode(payload)
+        let produced = try JSONSerialization.jsonObject(with: data)
+        try assertStructurallyEqual(golden, produced, path: "$")
+    }
+
     // MARK: - Helpers
 
     private func readGolden(_ name: String) throws -> Any {
