@@ -31,7 +31,7 @@ final class SankofaSessionManagerTests: XCTestCase {
 
     func testSessionIdHasPrefix() {
         let manager = SankofaSessionManager()
-        XCTAssertTrue(manager.sessionId.hasPrefix("session_"))
+        XCTAssertTrue(manager.sessionId.hasPrefix("s_"))
     }
 
     func testRotateGeneratesNewId() {
@@ -54,7 +54,7 @@ final class SankofaConfigTests: XCTestCase {
         XCTAssertEqual(config.batchSize, 50)
         XCTAssertTrue(config.recordSessions)
         XCTAssertTrue(config.maskAllInputs)
-        XCTAssertEqual(config.captureMode, .wireframe)
+        XCTAssertEqual(config.captureScale, 0.35, accuracy: 0.0001)
     }
 
     func testCustomValues() {
@@ -62,11 +62,11 @@ final class SankofaConfigTests: XCTestCase {
             endpoint: "https://local:8080",
             debug: true,
             batchSize: 100,
-            captureMode: .screenshot
+            captureScale: 0.5
         )
         XCTAssertEqual(config.endpoint, "https://local:8080")
         XCTAssertTrue(config.debug)
         XCTAssertEqual(config.batchSize, 100)
-        XCTAssertEqual(config.captureMode, .screenshot)
+        XCTAssertEqual(config.captureScale, 0.5, accuracy: 0.0001)
     }
 }

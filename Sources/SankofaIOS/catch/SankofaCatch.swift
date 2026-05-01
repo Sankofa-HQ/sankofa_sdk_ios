@@ -119,13 +119,13 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             let sigName = Self.signalName(dump.signal)
             let frames = dump.backtrace.map { addr -> CatchStackFrame in
                 CatchStackFrame(
-                    function: nil,
                     filename: nil,
+                    function: nil,
                     lineno: nil,
                     colno: nil,
                     in_app: nil,
-                    package: nil,
                     instruction_addr: String(format: "0x%016llx", addr),
+                    package: nil,
                     addr_mode: nil
                 )
             }
