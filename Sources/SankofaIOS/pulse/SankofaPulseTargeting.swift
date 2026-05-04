@@ -48,9 +48,10 @@ public struct SankofaPulseTargetingRule: Codable, Sendable {
     // url
     public let urlMatch: String?
     public let urlValue: String?
-    // screen — same shape as url, applied to native screen names.
+    // screen — same comparator set as url, OR-matched against the
+    // native screen / route name. screenNames is the target set.
     public let screenMatch: String?
-    public let screenName: String?
+    public let screenNames: [String]?
     // event
     public let eventName: String?
     public let eventMinCount: Int?
@@ -76,7 +77,7 @@ public struct SankofaPulseTargetingRule: Codable, Sendable {
         urlMatch: String? = nil,
         urlValue: String? = nil,
         screenMatch: String? = nil,
-        screenName: String? = nil,
+        screenNames: [String]? = nil,
         eventName: String? = nil,
         eventMinCount: Int? = nil,
         eventWindowDays: Int? = nil,
@@ -95,7 +96,7 @@ public struct SankofaPulseTargetingRule: Codable, Sendable {
         self.urlMatch = urlMatch
         self.urlValue = urlValue
         self.screenMatch = screenMatch
-        self.screenName = screenName
+        self.screenNames = screenNames
         self.eventName = eventName
         self.eventMinCount = eventMinCount
         self.eventWindowDays = eventWindowDays
@@ -116,7 +117,7 @@ public struct SankofaPulseTargetingRule: Codable, Sendable {
         case urlMatch = "url_match"
         case urlValue = "url_value"
         case screenMatch = "screen_match"
-        case screenName = "screen_name"
+        case screenNames = "screen_names"
         case eventName = "event_name"
         case eventMinCount = "event_min_count"
         case eventWindowDays = "event_window_days"
@@ -253,31 +254,41 @@ public enum SankofaPulseTargeting {
         _ ctx: SankofaPulseEligibilityContext
     ) -> (Bool, String) {
         let screen = ctx.screenName ?? ""
-        let target = rule.screenName ?? ""
         if screen.isEmpty {
             return (false, "screen unknown")
         }
-        switch rule.screenMatch {
+        let targets = (rule.screenNames ?? []).filter { !$0.isEmpty }
+        if targets.isEmpty {
+            return (false, "screen rule has no targets")
+        }
+        for target in targets {
+            if matchScreen(screen, target, rule.screenMatch) {
+                return (true, "")
+            }
+        }
+        return (false, "screen does not match any target")
+    }
+
+    private static func matchScreen(
+        _ screen: String, _ target: String, _ op: String?
+    ) -> Bool {
+        switch op {
         case SankofaPulseMatchOp.equals:
             return screen == target
-                ? (true, "") : (false, "screen not equal to target")
         case SankofaPulseMatchOp.contains:
             return screen.contains(target)
-                ? (true, "") : (false, "screen does not contain target")
         case SankofaPulseMatchOp.prefix:
             return screen.hasPrefix(target)
-                ? (true, "") : (false, "screen does not start with target")
         case SankofaPulseMatchOp.regex:
             do {
                 let re = try NSRegularExpression(pattern: target)
                 let range = NSRange(screen.startIndex..., in: screen)
                 return re.firstMatch(in: screen, range: range) != nil
-                    ? (true, "") : (false, "screen does not match regex")
             } catch {
-                return (false, "screen regex did not compile")
+                return false
             }
         default:
-            return (false, "screen_match unknown")
+            return false
         }
     }
 
