@@ -1,6 +1,12 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import PencilKit
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// SwiftUI survey renderer. One question at a time with a Next /
 /// Back / Submit footer. Renders all 19 question kinds the server
@@ -47,6 +53,12 @@ public struct SankofaSurveyView: View {
                 }
             }
             footer
+            // Powered-by-Sankofa attribution row. Mirrors the Web SDK
+            // + dashboard preview exactly: same icon (decoded from
+            // the shared base64 brand asset), same label, same link,
+            // top-bordered. Suppressed only on white-label tiers in
+            // a future iteration.
+            poweredBySankofa
         }
         .padding(.vertical, 16)
         .background(themeBackground)
@@ -208,6 +220,49 @@ public struct SankofaSurveyView: View {
             primarySubmitButton
         }
         .padding(.horizontal)
+    }
+
+    /// Decoded once per process. Re-decoding the 5 KB base64 each
+    /// time the survey re-renders is wasteful, and SwiftUI evaluates
+    /// `body` aggressively during state changes. Falls through to a
+    /// nil image on platforms without UIKit/AppKit (linux Foundation
+    /// builds, etc.) — the attribution text still renders.
+    private static let brandIconImage: Image? = {
+        guard let data = Data(base64Encoded: SankofaPulseBrand.iconBase64)
+        else { return nil }
+        #if canImport(UIKit)
+        if let ui = UIImage(data: data) { return Image(uiImage: ui) }
+        return nil
+        #elseif canImport(AppKit)
+        if let ns = NSImage(data: data) { return Image(nsImage: ns) }
+        return nil
+        #else
+        return nil
+        #endif
+    }()
+
+    @ViewBuilder
+    private var poweredBySankofa: some View {
+        VStack(spacing: 0) {
+            Divider().background(themeMuted.opacity(0.2))
+            HStack(spacing: 4) {
+                if let icon = Self.brandIconImage {
+                    icon
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 12, height: 12)
+                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                }
+                Link(SankofaPulseBrand.attributionLabel,
+                     destination: SankofaPulseBrand.attributionURL)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(themeMuted)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
     }
 
     /// `.borderedProminent` requires iOS 15+. Fall back to the
