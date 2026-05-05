@@ -189,6 +189,64 @@ public struct SankofaPulseHandshakeResponse: Codable, Sendable {
     public let surveys: [SankofaPulseSurvey]
 }
 
+/// Lightweight projection returned by GET /api/pulse/surveys —
+/// pairs each survey's identity with its targeting rules so the
+/// SDK can run local eligibility evaluation without a per-survey
+/// bundle fetch. Mirrors the server's `sdkSurveySummary`.
+public struct SankofaPulseSurveySummary: Codable, Sendable, Identifiable, Hashable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let kind: SankofaPulseSurveyKind
+    public let status: String
+    public let slug: String?
+    public let targetingRules: [SankofaPulseTargetingRule]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case kind
+        case status
+        case slug
+        case targetingRules = "targeting_rules"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        self.description = try c.decodeIfPresent(String.self, forKey: .description)
+        self.kind = try c.decode(SankofaPulseSurveyKind.self, forKey: .kind)
+        self.status = try c.decodeIfPresent(String.self, forKey: .status) ?? ""
+        self.slug = try c.decodeIfPresent(String.self, forKey: .slug)
+        self.targetingRules = try c.decodeIfPresent(
+            [SankofaPulseTargetingRule].self, forKey: .targetingRules) ?? []
+    }
+
+    public init(
+        id: String,
+        name: String,
+        description: String? = nil,
+        kind: SankofaPulseSurveyKind,
+        status: String,
+        slug: String? = nil,
+        targetingRules: [SankofaPulseTargetingRule] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.kind = kind
+        self.status = status
+        self.slug = slug
+        self.targetingRules = targetingRules
+    }
+}
+
+public struct SankofaPulseSurveysResponse: Codable, Sendable {
+    public let surveys: [SankofaPulseSurveySummary]?
+}
+
 /// Full survey bundle — survey row + targeting rules + branching
 /// rules. Mirrors the server's `sdkSurveyBundle`
 /// (handlers_sdk_bundle.go). Themes, translations, and partial

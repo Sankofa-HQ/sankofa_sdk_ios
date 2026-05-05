@@ -55,6 +55,22 @@ public final class SankofaPulseClient {
         return try await perform(req, decode: SankofaPulseHandshakeResponse.self)
     }
 
+    /// List every published survey the API key's project owns. Each
+    /// summary carries the targeting rules so callers can run local
+    /// eligibility evaluation without a per-survey bundle round-trip.
+    /// Powers `getActiveMatchingSurveys()`. 404 → empty list, so
+    /// older engines without this endpoint don't break the SDK.
+    public func listSurveys() async throws -> [SankofaPulseSurveySummary] {
+        let req = try buildRequest(path: "/api/pulse/surveys", method: "GET")
+        do {
+            let body = try await perform(
+                req, decode: SankofaPulseSurveysResponse.self)
+            return body.surveys ?? []
+        } catch ClientError.http(status: 404, body: _) {
+            return []
+        }
+    }
+
     /// Load the full survey bundle (survey row + targeting rules)
     /// for one survey. The SDK calls this right before presenting so
     /// it can run the targeting evaluator locally and skip the show

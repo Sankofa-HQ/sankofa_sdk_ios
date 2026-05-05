@@ -38,6 +38,11 @@ public final class SankofaPulse {
     private var queue: SankofaPulseQueue?
     private var registered: Bool = false
     private var cachedSurveys: [SankofaPulseSurvey] = []
+    /// Targeting rules keyed by survey id, populated alongside
+    /// `cachedSurveys` on each `refreshSurveys()`. Lets
+    /// `activeMatchingSurveys` run the local eligibility evaluator
+    /// without fetching a full bundle for every cached survey.
+    private var cachedTargeting: [String: [SankofaPulseTargetingRule]] = [:]
 
     /// In-flight partial-save task. Coalesce on a 750ms debounce so
     /// a fast-clicking respondent who skips through several questions
@@ -131,32 +136,84 @@ public final class SankofaPulse {
 
     /// Refreshes the cached survey list from the server. Called
     /// automatically on register() and after a successful submit.
+    /// Prefers the SDK-readable list endpoint
+    /// (`GET /api/pulse/surveys`) which returns each survey with its
+    /// targeting rules attached for local eligibility evaluation.
+    /// Falls back to the legacy `/api/pulse/handshake` endpoint when
+    /// the new one returns empty (older engines).
     public func refreshSurveys() async {
         guard let client = client else { return }
         do {
-            let r = try await client.handshake()
-            await MainActor.run { self.cachedSurveys = r.surveys }
+            let summaries = try await client.listSurveys()
+            if !summaries.isEmpty {
+                let surveys = summaries.map { s in
+                    SankofaPulseSurvey(
+                        id: s.id,
+                        kind: s.kind,
+                        name: s.name,
+                        description: s.description,
+                        questions: [],
+                        theme: nil)
+                }
+                let rules = Dictionary(
+                    uniqueKeysWithValues: summaries.map {
+                        ($0.id, $0.targetingRules)
+                    })
+                await MainActor.run {
+                    self.cachedSurveys = surveys
+                    self.cachedTargeting = rules
+                }
+            } else {
+                let r = try await client.handshake()
+                await MainActor.run {
+                    self.cachedSurveys = r.surveys
+                    self.cachedTargeting = [:]
+                }
+            }
             // Drain any queued submissions while we have a working
             // network connection.
             await drainQueue()
         } catch {
-            // Swallow — handshake failures shouldn't crash the host;
+            // Swallow — refresh failures shouldn't crash the host;
             // the next call retries.
         }
     }
 
-    /// Returns the surveys eligible for the current user/session.
-    /// In v1 this is just every published survey from the handshake;
-    /// targeting evaluation lands in a future release.
+    /// Returns the surveys whose targeting rules pass for the
+    /// current respondent. Combines the cached SDK-readable list
+    /// (with targeting rules attached) with the local evaluator
+    /// — same evaluator the renderer uses, so the answer is
+    /// consistent with what `show()` would actually present.
+    ///
+    /// `properties` and `flags` feed `user_property` /
+    /// `feature_flag` rule evaluation.
     public func activeMatchingSurveys(
+        properties: [String: SankofaPulseAnyJSON] = [:],
+        flags: [String: SankofaPulseAnyJSON] = [:],
         _ completion: @escaping ([SankofaPulseSurvey]) -> Void
     ) {
+        let evaluate: () -> Void = { [weak self] in
+            guard let self = self else { completion([]); return }
+            let surveys = self.cachedSurveys
+            let rulesById = self.cachedTargeting
+            let out = surveys.filter { s in
+                let rules = rulesById[s.id] ?? []
+                if rules.isEmpty { return true }
+                let decision = self.evaluateLocally(
+                    surveyId: s.id,
+                    rules: rules,
+                    properties: properties,
+                    flags: flags)
+                return decision.eligible
+            }
+            completion(out)
+        }
         if !cachedSurveys.isEmpty {
-            completion(cachedSurveys); return
+            evaluate(); return
         }
         Task {
             await refreshSurveys()
-            await MainActor.run { completion(self.cachedSurveys) }
+            await MainActor.run { evaluate() }
         }
     }
 
