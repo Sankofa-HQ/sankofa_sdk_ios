@@ -55,20 +55,108 @@ public final class SankofaPulseClient {
         return try await perform(req, decode: SankofaPulseHandshakeResponse.self)
     }
 
-    /// List every published survey the API key's project owns. Each
-    /// summary carries the targeting rules so callers can run local
-    /// eligibility evaluation without a per-survey bundle round-trip.
-    /// Powers `getActiveMatchingSurveys()`. 404 → empty list, so
-    /// older engines without this endpoint don't break the SDK.
-    public func listSurveys() async throws -> [SankofaPulseSurveySummary] {
-        let req = try buildRequest(path: "/api/pulse/surveys", method: "GET")
-        do {
-            let body = try await perform(
-                req, decode: SankofaPulseSurveysResponse.self)
-            return body.surveys ?? []
-        } catch ClientError.http(status: 404, body: _) {
-            return []
+    /// List every published survey the API key's project owns.
+    /// Cached in UserDefaults with ETag + TTL — reads after the
+    /// first fetch are instant, and revalidations short-circuit to
+    /// a 304 + zero body when the server hasn't changed anything.
+    /// Same posture as the Web / RN SDKs: one full fetch per device
+    /// per few minutes, 304 the rest. 404 → empty list so older
+    /// engines without this endpoint don't break the SDK.
+    public func listSurveys(
+        forceRefresh: Bool = false,
+        ttl: TimeInterval = SankofaPulseClient.defaultListTtl
+    ) async throws -> [SankofaPulseSurveySummary] {
+        guard !endpoint.isEmpty else { throw ClientError.notInitialized }
+        let cacheKey = SankofaPulseClient.surveysCachePrefix +
+            endpoint + "|" + apiKey
+        let now = Date().timeIntervalSince1970
+        let cached = SankofaPulseClient.readCache(forKey: cacheKey)
+
+        if !forceRefresh, let c = cached, now - c.fetchedAt < ttl {
+            return c.surveys
         }
+
+        guard let url = URL(string: endpoint + "/api/pulse/surveys") else {
+            throw ClientError.malformedURL
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let etag = cached?.etag, !etag.isEmpty {
+            req.setValue(etag, forHTTPHeaderField: "If-None-Match")
+        }
+
+        do {
+            let (data, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                throw ClientError.http(status: 0, body: nil)
+            }
+            if http.statusCode == 304, let c = cached {
+                SankofaPulseClient.writeCache(
+                    forKey: cacheKey,
+                    value: SankofaPulseClient.CachedSurveysList(
+                        etag: c.etag,
+                        fetchedAt: now,
+                        surveys: c.surveys))
+                return c.surveys
+            }
+            if http.statusCode == 404 { return [] }
+            if !(200..<300).contains(http.statusCode) {
+                throw ClientError.http(
+                    status: http.statusCode,
+                    body: String(data: data, encoding: .utf8))
+            }
+            let etag = (http.value(forHTTPHeaderField: "ETag")) ?? ""
+            let decoded: SankofaPulseSurveysResponse
+            do {
+                decoded = try decoder.decode(
+                    SankofaPulseSurveysResponse.self, from: data)
+            } catch {
+                throw ClientError.decode(error)
+            }
+            let surveys = decoded.surveys ?? []
+            SankofaPulseClient.writeCache(
+                forKey: cacheKey,
+                value: SankofaPulseClient.CachedSurveysList(
+                    etag: etag,
+                    fetchedAt: now,
+                    surveys: surveys))
+            return surveys
+        } catch {
+            // Network failed but we have a stale cache — return it
+            // rather than blocking the host. Better stale surveys
+            // for one tick than a broken modal during a flaky moment.
+            if let c = cached { return c.surveys }
+            throw error
+        }
+    }
+
+    /// Cache TTL between full revalidations. After this, the next
+    /// `listSurveys()` call sends a conditional GET; the server
+    /// returns 304 + zero body when nothing has changed, dropping
+    /// the per-survey targeting-rule load on the server.
+    public static let defaultListTtl: TimeInterval = 5 * 60
+    fileprivate static let surveysCachePrefix = "sankofa.pulse.surveys."
+
+    fileprivate struct CachedSurveysList: Codable {
+        let etag: String
+        let fetchedAt: TimeInterval
+        let surveys: [SankofaPulseSurveySummary]
+    }
+
+    fileprivate static func readCache(forKey key: String) -> CachedSurveysList? {
+        guard let data = UserDefaults.standard.data(forKey: key) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(CachedSurveysList.self, from: data)
+    }
+
+    fileprivate static func writeCache(
+        forKey key: String, value: CachedSurveysList
+    ) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        UserDefaults.standard.set(data, forKey: key)
     }
 
     /// Load the full survey bundle (survey row + targeting rules)

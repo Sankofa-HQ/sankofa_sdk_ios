@@ -201,6 +201,15 @@ public struct SankofaPulseSurveySummary: Codable, Sendable, Identifiable, Hashab
     public let status: String
     public let slug: String?
     public let targetingRules: [SankofaPulseTargetingRule]
+    /// Dashboard-controlled display behaviour. `autoShow` is the
+    /// master switch (false = manual `show()` only).
+    /// `displayCooldownSeconds` is the post-dismiss suppression
+    /// window on the same device (default 7 days).
+    /// `displayDelayMs` is the pause between trigger and present
+    /// (default 0 = immediate).
+    public let autoShow: Bool
+    public let displayCooldownSeconds: Int
+    public let displayDelayMs: Int
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -210,6 +219,9 @@ public struct SankofaPulseSurveySummary: Codable, Sendable, Identifiable, Hashab
         case status
         case slug
         case targetingRules = "targeting_rules"
+        case autoShow = "auto_show"
+        case displayCooldownSeconds = "display_cooldown_seconds"
+        case displayDelayMs = "display_delay_ms"
     }
 
     public init(from decoder: Decoder) throws {
@@ -222,6 +234,11 @@ public struct SankofaPulseSurveySummary: Codable, Sendable, Identifiable, Hashab
         self.slug = try c.decodeIfPresent(String.self, forKey: .slug)
         self.targetingRules = try c.decodeIfPresent(
             [SankofaPulseTargetingRule].self, forKey: .targetingRules) ?? []
+        self.autoShow = try c.decodeIfPresent(Bool.self, forKey: .autoShow) ?? true
+        self.displayCooldownSeconds = try c.decodeIfPresent(
+            Int.self, forKey: .displayCooldownSeconds) ?? 7 * 24 * 60 * 60
+        self.displayDelayMs = try c.decodeIfPresent(
+            Int.self, forKey: .displayDelayMs) ?? 0
     }
 
     public init(
@@ -231,7 +248,10 @@ public struct SankofaPulseSurveySummary: Codable, Sendable, Identifiable, Hashab
         kind: SankofaPulseSurveyKind,
         status: String,
         slug: String? = nil,
-        targetingRules: [SankofaPulseTargetingRule] = []
+        targetingRules: [SankofaPulseTargetingRule] = [],
+        autoShow: Bool = true,
+        displayCooldownSeconds: Int = 7 * 24 * 60 * 60,
+        displayDelayMs: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -240,6 +260,9 @@ public struct SankofaPulseSurveySummary: Codable, Sendable, Identifiable, Hashab
         self.status = status
         self.slug = slug
         self.targetingRules = targetingRules
+        self.autoShow = autoShow
+        self.displayCooldownSeconds = displayCooldownSeconds
+        self.displayDelayMs = displayDelayMs
     }
 }
 
