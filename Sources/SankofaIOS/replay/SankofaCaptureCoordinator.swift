@@ -101,10 +101,17 @@ final class SankofaCaptureCoordinator {
     /// Forces an immediate high-fidelity capture cycle, typically after a server-side request.
     /// Even if the coordinator is in a throttled state, this ensures a baseline is sent.
     func triggerHighFidelityMode(duration: TimeInterval) {
+        // 🚦 Same untagged-screen guard as the idle path — a forced capture
+        // before the host has tagged the screen would still pollute the
+        // "Unknown" bucket, so we skip and re-queue the touch buffer for
+        // the next cycle (the touchInterceptor.flush() call below would
+        // otherwise discard the buffered touches).
+        let screen = self.screenNameProvider()
+        guard !screen.isEmpty else { return }
+
         // Snap! Force an immediate capture cycle.
         let context = self.deviceInfo.deviceContext()
         let interactions = self.touchInterceptor?.flush() ?? []
-        let screen = self.screenNameProvider()
         let scrollY = self.touchInterceptor?.currentScrollOffsetY ?? 0
 
         screenshotEngine.captureFrame { [weak self] frame in
@@ -155,6 +162,19 @@ final class SankofaCaptureCoordinator {
             let forceCaptureDueToInteractions = hasCarriedInteractions && timeSinceLast >= frameInterval * 1.5
 
             guard timeSinceLast >= frameInterval || forceCaptureDueToInteractions else { return }
+
+            // 🚦 Cold-start screen guard.  The host language tags screens
+            // explicitly (SwiftUI / RN / Flutter) — until that happens,
+            // `screenNameProvider()` returns the empty string sentinel.
+            // Skipping here means the carryover bucket ALSO stays in
+            // place, so the very first interactions captured on a real
+            // tagged screen still ride along with the next frame after
+            // tagging.  Without this guard, the dashboard would see an
+            // "Unknown"-screen bucket that no real navigation ever
+            // matches.  Mirrors Android's `hasTaggedScreen()` behaviour.
+            let screen = self.screenNameProvider()
+            guard !screen.isEmpty else { return }
+
             self.lastCaptureTime = now
 
             // Snapshot and clear the carryover bucket atomically
@@ -162,7 +182,6 @@ final class SankofaCaptureCoordinator {
             self.pendingCarryoverInteractions = []
 
             let context = self.deviceInfo.deviceContext()
-            let screen = self.screenNameProvider()
             let scrollY = self.touchInterceptor?.currentScrollOffsetY ?? 0
 
             self.screenshotEngine.captureFrame { frame in

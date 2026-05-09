@@ -46,6 +46,31 @@ public final class Sankofa: NSObject {
     /// The current screen name for stateful tagging (Heatmaps).
     private var currentScreen: String = "Unknown"
 
+    // ── SwiftUI / custom-scrollable scroll-offset providers ──────────────
+    //
+    // UIKit `UIScrollView` (and subclasses: UITableView / UICollectionView)
+    // are walked from the key window's view tree by `SankofaTouchInterceptor`.
+    // SwiftUI hosts most modern apps and ScrollView is bridged to a UIScrollView
+    // on iOS 16+ — but custom scroll containers, `LazyVGrid` inside opaque
+    // hosting views, or older iOS versions can return zero offset, which
+    // collapses every below-the-fold tap to the first viewport in the
+    // heatmap panorama.
+    //
+    // The host registers a callback returning the active scroll offset in
+    // points (typically `{ scrollOffset.y }` from a SwiftUI `GeometryReader`
+    // / `ScrollViewReader` / `.onScrollGeometryChange` value).  Multiple
+    // registrations are supported — providers iterate in registration
+    // order and the first non-zero result wins.  This matches the
+    // "first scrollable wins" semantics of the classic-View walker on
+    // both iOS and Android.
+    //
+    // All access is serialised under `scrollProvidersLock` so registration
+    // and lookup are safe from any thread (typical use registers from the
+    // main thread but the touch interceptor reads from CFRunLoop callbacks
+    // and the upload coroutine).
+    private var scrollOffsetProviders: [(id: UUID, provider: () -> CGFloat)] = []
+    private let scrollProvidersLock = NSLock()
+
     private var logger = SankofaLogger(debug: false)
     private var identity = SankofaIdentity()
     private var sessionManager = SankofaSessionManager()
@@ -171,12 +196,19 @@ public final class Sankofa: NSObject {
 
         if config.recordSessions {
             coordinator.start(sessionId: sessionManager.sessionId, screenNameProvider: { [weak self] in
-                guard let self = self else { return "Unknown" }
-                // 🚀 Manual > Auto Hierarchy
+                guard let self = self else { return "" }
+                // 🚀 Manual > Auto hierarchy.
+                //
+                // Empty string is the "untagged" sentinel — it tells the
+                // capture coordinator to skip both the frame and any
+                // pending interactions for this tick.  Better to lose a
+                // few cold-start frames than to flood the dashboard with
+                // "Unknown" screen rows that no real navigation will
+                // ever match.  Mirrors Android's `hasTaggedScreen()` guard.
                 if self.currentScreen != "Unknown" {
                     return self.currentScreen
                 }
-                return SankofaScreenTracker.findCurrentScreenName() ?? "Unknown"
+                return SankofaScreenTracker.findCurrentScreenName() ?? ""
             })
         }
         
@@ -202,6 +234,79 @@ public final class Sankofa: NSObject {
         var screenProps = properties
         screenProps["$screen_name"] = name
         track("$screen_view", properties: screenProps)
+    }
+
+    /// Register a callback that returns the current scroll offset (in
+    /// points) of a SwiftUI or custom scroll container.  Use this from a
+    /// SwiftUI view whose state you want included in heatmap accuracy:
+    ///
+    /// ```swift
+    /// struct ProductList: View {
+    ///     @State private var scrollOffset: CGFloat = 0
+    ///     @State private var sankofaHandle: SankofaScrollContainerHandle?
+    ///
+    ///     var body: some View {
+    ///         ScrollView {
+    ///             LazyVStack { … }
+    ///                 .background(GeometryReader { geo in
+    ///                     Color.clear.preference(
+    ///                         key: ScrollOffsetKey.self,
+    ///                         value: -geo.frame(in: .named("scroll")).minY
+    ///                     )
+    ///                 })
+    ///         }
+    ///         .coordinateSpace(name: "scroll")
+    ///         .onPreferenceChange(ScrollOffsetKey.self) { scrollOffset = $0 }
+    ///         .onAppear {
+    ///             sankofaHandle = Sankofa.shared.tagScrollContainer { scrollOffset }
+    ///         }
+    ///         .onDisappear {
+    ///             sankofaHandle?.remove()
+    ///             sankofaHandle = nil
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// `UIKit` apps using `UIScrollView` / `UITableView` / `UICollectionView`
+    /// don't need to call this — the touch interceptor already walks the
+    /// view tree for those.  The SwiftUI ScrollView bridge on iOS 16+
+    /// also resolves through that walk in most cases — explicit
+    /// registration is the escape hatch for hosts where the walk
+    /// returns zero (custom scroll containers, opaque hosting views,
+    /// pre-iOS 16 SwiftUI).
+    ///
+    /// Returns a `SankofaScrollContainerHandle`; call `.remove()` when
+    /// the scroll container leaves scope.  Idempotent.
+    @objc
+    @discardableResult
+    public func tagScrollContainer(provider: @escaping () -> CGFloat) -> SankofaScrollContainerHandle {
+        let id = UUID()
+        scrollProvidersLock.lock()
+        scrollOffsetProviders.append((id: id, provider: provider))
+        scrollProvidersLock.unlock()
+        return SankofaScrollContainerHandle { [weak self] in
+            guard let self = self else { return }
+            self.scrollProvidersLock.lock()
+            self.scrollOffsetProviders.removeAll { $0.id == id }
+            self.scrollProvidersLock.unlock()
+        }
+    }
+
+    /// Internal helper consulted by the touch interceptor and the capture
+    /// coordinator to resolve the active scroll offset before falling
+    /// back to the UIKit `findActiveScrollView` walk.  Defensive
+    /// try/catch isn't possible in Swift but a host callback that
+    /// crashes will surface clearly during development.
+    internal func resolveScrollContainerOffset() -> CGFloat {
+        scrollProvidersLock.lock()
+        let snapshot = scrollOffsetProviders
+        scrollProvidersLock.unlock()
+        for entry in snapshot {
+            let value = entry.provider()
+            if value > 0 { return value }
+        }
+        return 0
     }
 
     /// Identify a user by their unique ID. Merges anonymous history into the profile.

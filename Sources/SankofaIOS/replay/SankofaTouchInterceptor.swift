@@ -74,7 +74,21 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
 
     /// Evaluates the current scroll offset of the key window.
     /// Useful for idle-snapping when no interactions have occurred recently.
+    ///
+    /// Resolution order:
+    ///   1. Explicit `tagScrollContainer` providers (SwiftUI / custom hosts).
+    ///   2. UIKit `findActiveScrollView` walk (UIScrollView, UITableView,
+    ///      UICollectionView, and SwiftUI ScrollView's UIScrollView bridge
+    ///      on iOS 16+).
+    ///
+    /// Compose-style explicit registration wins because SwiftUI doesn't
+    /// expose its scroll position through `UIScrollView.contentOffset` for
+    /// every screen — without an explicit provider, those screens collapse
+    /// every below-the-fold tap to the first viewport in the heatmap
+    /// panorama.
     var currentScrollOffsetY: CGFloat {
+        let explicit = Sankofa.shared.resolveScrollContainerOffset()
+        if explicit > 0 { return explicit }
         guard let window = self.view as? UIWindow else { return 0 }
         if let scrollView = findActiveScrollView(in: window) {
             return scrollView.contentOffset.y
@@ -115,9 +129,10 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
             // Emit a synthetic double_tap Interaction at the same coordinates.
             // We bypass record() so the move-coalesce + scroll-resolve logic
             // doesn't double-count work — the cheap path is sufficient since
-            // we just resolved the location above.
-            var scrollOffsetY: CGFloat = 0
-            if let scrollView = findActiveScrollView(in: window) {
+            // we just resolved the location above.  Same explicit-provider-
+            // wins resolution order as `record()`.
+            var scrollOffsetY: CGFloat = Sankofa.shared.resolveScrollContainerOffset()
+            if scrollOffsetY <= 0, let scrollView = findActiveScrollView(in: window) {
                 scrollOffsetY = scrollView.contentOffset.y
             }
             let absoluteY = location.y + scrollOffsetY
@@ -202,12 +217,16 @@ final class SankofaTouchInterceptor: UIGestureRecognizer {
             interactionType = "pinch"
         }
         
-        // 🚀 Infinite Scroll Support: Find active scroll offset
-        var scrollOffsetY: CGFloat = 0
-        if let scrollView = findActiveScrollView(in: window) {
+        // 🚀 Infinite Scroll Support: explicit `tagScrollContainer`
+        // providers win over the UIKit walk so SwiftUI hosts that wired
+        // up a `Sankofa.shared.tagScrollContainer { ... }` get accurate
+        // below-the-fold attribution.  Falls back to the classic walk
+        // for UIKit / iOS 16+ SwiftUI ScrollView.
+        var scrollOffsetY: CGFloat = Sankofa.shared.resolveScrollContainerOffset()
+        if scrollOffsetY <= 0, let scrollView = findActiveScrollView(in: window) {
             scrollOffsetY = scrollView.contentOffset.y
         }
-        
+
         let absoluteY = location.y + scrollOffsetY
         let screen = screenNameProvider()
 
