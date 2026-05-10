@@ -191,6 +191,19 @@ public final class Sankofa: NSObject {
             #endif
         }
 
+        // ── Catch (Crashlytics + Sentry merged) ──────────────────────
+        // Auto-install the NSException + POSIX-signal handlers so host
+        // code doesn't need a separate `SankofaCatch.shared.start(...)`
+        // call. Skipped when the host opts out via `enableCatch = false`
+        // or has already wired Catch by hand (test harnesses, hot reload).
+        if config.enableCatch && !SankofaCatch.shared.isStarted {
+            _ = SankofaCatch.shared.start(
+                environment: config.catchEnvironment,
+                release: config.release,
+                appVersion: config.appVersion
+            )
+        }
+
         observer.start()
         fm.start()
 
@@ -575,5 +588,124 @@ public final class Sankofa: NSObject {
                 self.logger.log("📦 Deploy update available: \(deploy["label"] ?? "?")")
             }
         }.resume()
+    }
+}
+
+// MARK: - Catch static helpers (Crashlytics + Sentry merged)
+//
+// Surface area pinned for parity with the Flutter / RN / Android SDKs.
+// Each helper degrades to a no-op when Catch hasn't booted yet (e.g.
+// host disabled it via `enableCatch = false`) so call sites never need
+// to guard `if catchEnabled { ... }`.
+//
+// ## Why static
+//
+// Sentry's iOS SDK exposes `SentrySDK.capture(error:)` rather than
+// `SentrySDK.shared.capture(error:)` — the implicit "no instance to
+// thread through" makes capture sites read like a single-line log
+// statement, which is what Crashlytics + Sentry users already expect.
+extension Sankofa {
+
+    /// Capture a handled error. Returns the event ID, or `""` when
+    /// Catch is disabled / sampled out / not yet started.
+    ///
+    /// ```swift
+    /// do { try risky() } catch { Sankofa.captureException(error) }
+    /// ```
+    @discardableResult
+    @objc
+    public static func captureException(_ error: Error) -> String {
+        guard SankofaCatch.shared.isStarted else { return "" }
+        return SankofaCatch.shared.captureException(error)
+    }
+
+    /// Variant of `captureException` accepting a full `CaptureOptions`
+    /// (level / tags / extra / fingerprint / trace ids).
+    @discardableResult
+    public static func captureException(
+        _ error: Error,
+        options: SankofaCatch.CaptureOptions
+    ) -> String {
+        guard SankofaCatch.shared.isStarted else { return "" }
+        return SankofaCatch.shared.captureException(error, options: options)
+    }
+
+    /// Capture an arbitrary message — non-throwing variant of
+    /// `captureException`. Useful for non-fatal "this shouldn't happen"
+    /// branches.
+    @discardableResult
+    @objc
+    public static func captureMessage(_ message: String) -> String {
+        guard SankofaCatch.shared.isStarted else { return "" }
+        return SankofaCatch.shared.captureMessage(message)
+    }
+
+    @discardableResult
+    public static func captureMessage(
+        _ message: String,
+        options: SankofaCatch.CaptureOptions
+    ) -> String {
+        guard SankofaCatch.shared.isStarted else { return "" }
+        return SankofaCatch.shared.captureMessage(message, options: options)
+    }
+
+    /// Crashlytics-style breadcrumb log. Drops a free-text trail entry
+    /// onto the ring buffer that rides on the next captured event.
+    /// Doesn't bill — no event is emitted unless something else captures.
+    ///
+    /// ```swift
+    /// Sankofa.log("checkout: applying coupon \(code)")
+    /// ```
+    @objc
+    public static func log(_ message: String) {
+        guard SankofaCatch.shared.isStarted else { return }
+        SankofaCatch.shared.log(message)
+    }
+
+    @objc
+    public static func log(_ message: String, category: String) {
+        guard SankofaCatch.shared.isStarted else { return }
+        SankofaCatch.shared.log(message, category: category)
+    }
+
+    /// Set ambient user context that's stamped on every subsequent
+    /// capture. Pass `nil` to clear (e.g. on logout). Not `@objc`-exposed
+    /// because `CatchUserContext` is a Swift-only struct.
+    public static func setUser(_ user: CatchUserContext?) {
+        guard SankofaCatch.shared.isStarted else { return }
+        SankofaCatch.shared.setUser(user)
+    }
+
+    /// Set a single tag.
+    @objc
+    public static func setTag(_ key: String, _ value: String) {
+        guard SankofaCatch.shared.isStarted else { return }
+        SankofaCatch.shared.setTag(key, value)
+    }
+
+    /// Bulk-set tags — merges into the existing tag map.
+    @objc
+    public static func setTags(_ tags: [String: String]) {
+        guard SankofaCatch.shared.isStarted else { return }
+        SankofaCatch.shared.setTags(tags)
+    }
+
+    /// Set a single extra (arbitrary key/value) sent on every capture.
+    public static func setExtra(_ key: String, _ value: AnyCodable) {
+        guard SankofaCatch.shared.isStarted else { return }
+        SankofaCatch.shared.setExtra(key, value)
+    }
+
+    /// Push a breadcrumb onto the ring buffer. Use `log(_:)` for plain text.
+    public static func addBreadcrumb(_ crumb: CatchBreadcrumb) {
+        guard SankofaCatch.shared.isStarted else { return }
+        SankofaCatch.shared.addBreadcrumb(crumb)
+    }
+
+    /// Force-flush queued Catch events (e.g. before a known process exit).
+    @objc
+    public static func flushCatch() {
+        guard SankofaCatch.shared.isStarted else { return }
+        SankofaCatch.shared.flush()
     }
 }

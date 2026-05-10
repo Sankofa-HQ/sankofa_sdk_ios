@@ -79,6 +79,15 @@ public final class SankofaModuleRegistry {
         queue.sync { registered[name] != nil }
     }
 
+    /// Cross-module introspection. Returns the registered module
+    /// (concrete subtype erased to `SankofaPluggableModule`) or nil
+    /// when the module isn't linked. Used by Catch to auto-discover
+    /// Switch + RemoteConfig snapshots without forcing the host to
+    /// pass closures into `SankofaCatch.shared.start(...)`.
+    public func get(_ name: SankofaModuleName) -> SankofaPluggableModule? {
+        queue.sync { registered[name] }
+    }
+
     /// The list of module names the app binary ships with. Analytics
     /// is always present (it IS the core). Sent to the server in the
     /// Reverse Handshake.

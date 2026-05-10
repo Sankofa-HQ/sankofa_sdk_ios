@@ -39,6 +39,31 @@ public final class SankofaConfig: NSObject {
     /// Scale factor for screenshot engine to reduce resolution/payload size. Defaults to 0.5.
     @objc public var captureScale: CGFloat
 
+    // MARK: - Catch (error + crash + ANR reporting)
+    //
+    // Crashlytics + Sentry merged: when `enableCatch` is true,
+    // `Sankofa.shared.initialize(...)` installs `NSSetUncaughtExceptionHandler`,
+    // the POSIX-signal handler, and the persistent retry queue automatically —
+    // host code does NOT need a separate `SankofaCatch.shared.start(...)` call.
+
+    /// Auto-start `SankofaCatch.shared` inside `initialize(...)`.
+    /// Defaults to true. Set to false only if you need to defer Catch
+    /// boot (e.g. integration tests that spy on the global handler).
+    @objc public var enableCatch: Bool
+
+    /// Catch environment tag — "live", "staging", "dev", custom.
+    @objc public var catchEnvironment: String
+
+    /// Optional release identifier (e.g. "myapp@1.4.0+42") sent on every Catch event.
+    ///
+    /// Not `@objc`-exposed because the bare selector `release` collides
+    /// with `NSObject.release()` from legacy MRC; ObjC consumers can
+    /// use the designated initializer's `release:` parameter instead.
+    public var release: String?
+
+    /// Optional app version string sent in the Catch device context.
+    public var appVersion: String?
+
     // MARK: - Init
 
     @objc
@@ -51,6 +76,10 @@ public final class SankofaConfig: NSObject {
         recordSessions: Bool = true,
         maskAllInputs: Bool = true,
         captureScale: CGFloat = 0.35,
+        enableCatch: Bool = true,
+        catchEnvironment: String = "live",
+        release: String? = nil,
+        appVersion: String? = nil
     ) {
         self.endpoint = endpoint
         self.debug = debug
@@ -60,6 +89,10 @@ public final class SankofaConfig: NSObject {
         self.recordSessions = recordSessions
         self.maskAllInputs = maskAllInputs
         self.captureScale = captureScale
+        self.enableCatch = enableCatch
+        self.catchEnvironment = catchEnvironment
+        self.release = release
+        self.appVersion = appVersion
         super.init()
     }
 }

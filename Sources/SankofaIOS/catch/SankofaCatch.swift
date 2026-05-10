@@ -60,6 +60,7 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
 
     private var previousNSExceptionHandler: NSUncaughtExceptionHandler?
     private var handlerInstalled: Bool = false
+    private var started: Bool = false
 
     // MARK: - Init
 
@@ -81,11 +82,20 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
         readConfigSnapshot: (() -> [String: AnyCodable]?)? = nil
     ) -> SankofaCatch {
         queue.async(flags: .barrier) {
+            // Always refresh mutable options — host can re-call start()
+            // to update environment/release/appVersion mid-process.
             self.environment = environment
             self.releaseName = release
             self.appVersion = appVersion
             self.flagSnapshot = readFlagSnapshot
             self.configSnapshot = readConfigSnapshot
+
+            // First-call-only setup: hydrate, schedule the flush timer,
+            // and install global handlers. Second calls would otherwise
+            // leak a flush timer per call and re-drain crash dumps that
+            // were already drained.
+            guard !self.started else { return }
+            self.started = true
             self.hydrateFromStorage()
             self.startFlushTimer()
             if captureUnhandled {
@@ -100,6 +110,15 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             }
         }
         return self
+    }
+
+    /// True once `start()` has been called at least once. Static
+    /// helpers on the parent `Sankofa` class check this so they can
+    /// degrade to a no-op when the host disabled Catch via
+    /// `enableCatch = false` — keeps `Sankofa.captureException(e)` safe
+    /// to call from anywhere without a guard.
+    public var isStarted: Bool {
+        queue.sync { started }
     }
 
     /// Read crash dumps left by previous signal-crash runs and push
@@ -156,8 +175,8 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
                 device: buildDeviceContext(),
                 release: releaseName,
                 breadcrumbs: nil,
-                flag_snapshot: nil,
-                config_snapshot: nil,
+                flag_snapshot: flagSnapshot?() ?? autoFlagSnapshot(),
+                config_snapshot: configSnapshot?() ?? autoConfigSnapshot(),
                 debug_meta: CatchDebugMetaCapture.capture()
             )
             buffer.append(event)
@@ -233,12 +252,32 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
         queue.async(flags: .barrier) { self.breadcrumbs.push(crumb) }
     }
 
+    /// Crashlytics-style breadcrumb log. Drops a free-text trail entry
+    /// onto the ring buffer that rides on the next captured event.
+    /// Doesn't bill — no event is emitted unless something else captures.
+    public func log(_ message: String, category: String? = nil) {
+        let crumb = CatchBreadcrumb(
+            ts_ms: Int64(Date().timeIntervalSince1970 * 1000),
+            type: "log",
+            category: category ?? "log",
+            message: message,
+            level: .info,
+            data: nil
+        )
+        queue.async(flags: .barrier) { self.breadcrumbs.push(crumb) }
+    }
+
     public func setUser(_ user: CatchUserContext?) {
         queue.async(flags: .barrier) { self.user = user }
     }
 
     public func setTags(_ tags: [String: String]) {
         queue.async(flags: .barrier) { self.tags.merge(tags) { _, new in new } }
+    }
+
+    /// Single-key convenience over `setTags(_:)`.
+    public func setTag(_ key: String, _ value: String) {
+        queue.async(flags: .barrier) { self.tags[key] = value }
     }
 
     public func setExtra(_ key: String, _ value: AnyCodable) {
@@ -321,8 +360,8 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             release: releaseName,
             breadcrumbs: breadcrumbs.snapshot(),
             fingerprint: options.fingerprint,
-            flag_snapshot: flagSnapshot?(),
-            config_snapshot: configSnapshot?(),
+            flag_snapshot: flagSnapshot?() ?? autoFlagSnapshot(),
+            config_snapshot: configSnapshot?() ?? autoConfigSnapshot(),
             trace_id: options.trace_id,
             span_id: options.span_id,
             replay_chunk_index: nil,
@@ -337,6 +376,49 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             }
         }
         return eventID
+    }
+
+    // MARK: - Auto-discovery (Switch + Config snapshots)
+    //
+    // Used when the host didn't pass explicit `readFlagSnapshot` /
+    // `readConfigSnapshot` closures into `start(...)`. Looks the
+    // sibling modules up via the registry — if Switch/Config aren't
+    // linked the snapshot stays nil and the event ships without it.
+    //
+    // Casting through the registry keeps this file from forcing
+    // Switch/Config to be link-time mandatory: the registry is the
+    // only contract.
+
+    private func autoFlagSnapshot() -> [String: String]? {
+        guard let mod = SankofaModuleRegistry.shared.get(.switchModule),
+              let sw = mod as? SankofaSwitch else { return nil }
+        let keys = sw.getAllKeys()
+        guard !keys.isEmpty else { return nil }
+        var out: [String: String] = [:]
+        for k in keys {
+            guard let d = sw.getDecision(k) else { continue }
+            // Variants render as the variant key; pure boolean flags
+            // render as "true"/"false" so the dashboard can group on
+            // the value without re-resolving.
+            out[k] = d.variant.isEmpty ? String(d.value) : d.variant
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    private func autoConfigSnapshot() -> [String: AnyCodable]? {
+        guard let mod = SankofaModuleRegistry.shared.get(.configModule),
+              let rc = mod as? SankofaRemoteConfig else { return nil }
+        let keys = rc.getAllKeys()
+        guard !keys.isEmpty else { return nil }
+        var out: [String: AnyCodable] = [:]
+        for k in keys {
+            guard let d = rc.getDecision(k) else { continue }
+            // ConfigValue is a Sankofa-internal enum; the rawValue
+            // accessor flattens it to a JSON-friendly Any so AnyCodable
+            // can encode it on the wire alongside the rest of the event.
+            out[k] = AnyCodable(d.value.rawValue ?? NSNull())
+        }
+        return out.isEmpty ? nil : out
     }
 
     private func composeExceptionOrMessage(
@@ -553,8 +635,8 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             device: buildDeviceContext(),
             release: releaseName,
             breadcrumbs: breadcrumbs.snapshot(),
-            flag_snapshot: flagSnapshot?(),
-            config_snapshot: configSnapshot?(),
+            flag_snapshot: flagSnapshot?() ?? autoFlagSnapshot(),
+            config_snapshot: configSnapshot?() ?? autoConfigSnapshot(),
             debug_meta: CatchDebugMetaCapture.capture()
         )
         queue.sync(flags: .barrier) {
