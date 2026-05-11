@@ -61,6 +61,16 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
     private var previousNSExceptionHandler: NSUncaughtExceptionHandler?
     private var handlerInstalled: Bool = false
     private var started: Bool = false
+    private var beforeSendHook: BeforeSendFn?
+    private var stallDetector: CatchMainQueueStallDetector?
+
+    // Active withScope() stack — guarded by `queue` for thread safety.
+    // Captures fired on background queues each see the top scope at
+    // the moment the capture runs; scopes are stack-scoped to the
+    // closure that pushed them, so concurrent captures naturally
+    // serialize through the same DispatchQueue the rest of the client
+    // uses.
+    private var scopeStack: [SankofaCatchScope] = []
 
     // MARK: - Init
 
@@ -79,7 +89,12 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
         appVersion: String? = nil,
         captureUnhandled: Bool = true,
         readFlagSnapshot: (() -> [String: String]?)? = nil,
-        readConfigSnapshot: (() -> [String: AnyCodable]?)? = nil
+        readConfigSnapshot: (() -> [String: AnyCodable]?)? = nil,
+        beforeSend: BeforeSendFn? = nil,
+        /// Threshold in seconds before a hung main queue is reported
+        /// as a stall event. Set to `0` to disable. Defaults to 2.0s
+        /// matching Sentry's iOS SDK default.
+        stallThresholdSeconds: Double = 2.0
     ) -> SankofaCatch {
         queue.async(flags: .barrier) {
             // Always refresh mutable options — host can re-call start()
@@ -89,6 +104,7 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             self.appVersion = appVersion
             self.flagSnapshot = readFlagSnapshot
             self.configSnapshot = readConfigSnapshot
+            self.beforeSendHook = beforeSend
 
             // First-call-only setup: hydrate, schedule the flush timer,
             // and install global handlers. Second calls would otherwise
@@ -108,8 +124,36 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
                 CatchSignalHandler.install()
                 self.drainPendingNativeCrashes()
             }
+            // Main-queue stall detector — async observation only, so
+            // a hung main thread doesn't take down the rest of the SDK.
+            if stallThresholdSeconds > 0 {
+                let detector = CatchMainQueueStallDetector(
+                    thresholdSeconds: stallThresholdSeconds,
+                    onStall: { [weak self] durationMs in
+                        self?.captureStallEvent(durationMs: durationMs)
+                    }
+                )
+                detector.start()
+                self.stallDetector = detector
+            }
         }
         return self
+    }
+
+    /// Run `fn` with a fresh scope. Mutations made via the scope
+    /// (tags, extras, user, level, fingerprint) overlay onto any
+    /// `captureException` / `captureMessage` calls inside `fn`. Outside
+    /// `fn` the scope is gone — async captures deferred past the
+    /// closure's return will NOT see the scope.
+    public func withScope<T>(_ fn: (SankofaCatchScope) throws -> T) rethrows -> T {
+        let scope = SankofaCatchScope()
+        queue.sync(flags: .barrier) { self.scopeStack.append(scope) }
+        defer {
+            queue.sync(flags: .barrier) {
+                if !self.scopeStack.isEmpty { _ = self.scopeStack.removeLast() }
+            }
+        }
+        return try fn(scope)
     }
 
     /// True once `start()` has been called at least once. Static
@@ -325,11 +369,18 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
     private func capture(
         errorOrMessage: CaptureKind,
         type: String,
-        options: CaptureOptions,
+        options optionsIn: CaptureOptions,
         mechanism: CatchMechanism?
     ) -> String {
         guard enabled else { return "" }
         if !shouldSample() { return "" }
+
+        // Apply active withScope() overlay (if any). Layering order:
+        //   global setUser/setTags/setExtra (read below)
+        //   → top-of-stack scope (applyTo here)
+        //   → caller-supplied options (already merged in by applyTo)
+        let scope: SankofaCatchScope? = queue.sync { scopeStack.last }
+        let options: CaptureOptions = scope?.applyTo(optionsIn) ?? optionsIn
 
         let level = options.level ?? (type == "console_error" ? .warning : .error)
         let (exception, messageValue) = composeExceptionOrMessage(errorOrMessage, mechanism: mechanism)
@@ -368,14 +419,74 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             debug_meta: CatchDebugMetaCapture.capture()
         )
 
+        // beforeSend hook — host gets final say. A nil return drops
+        // the event; a throw is treated as "pass through unchanged"
+        // because losing telemetry from a buggy hook is worse than
+        // the hook misbehaving.
+        let outgoing: CatchEvent? = {
+            guard let hook = self.beforeSendHook else { return event }
+            return hook(event)
+        }()
+        guard let final = outgoing else {
+            return ""
+        }
         queue.async(flags: .barrier) {
-            self.buffer.append(event)
+            self.buffer.append(final)
             self.persistToStorage()
             if self.buffer.count >= SankofaCatch.batchSize {
                 self.flushInternal(keepalive: false)
             }
         }
-        return eventID
+        return final.event_id
+    }
+
+    // MARK: - Main-queue stall capture
+
+    /// Emit a stall event when the detector observes a wedged main
+    /// queue for longer than `stallThresholdSeconds`. The event has
+    /// no exception body — the main-thread call stack capture is a
+    /// Phase D feature pending mach-call symbolication.
+    private func captureStallEvent(durationMs: Double) {
+        let sankofaSDK = Sankofa.shared
+        let mech = CatchMechanism(
+            type: "main_queue_stall",
+            handled: false,
+            description: String(format: "Main queue stalled for %.0f ms", durationMs)
+        )
+        let exception = CatchException(
+            type: "MainQueueStall",
+            value: String(format: "Main queue stalled for %.0f ms", durationMs),
+            module: nil,
+            mechanism: mech,
+            stacktrace: nil,
+            chained: nil
+        )
+        let event = CatchEvent(
+            event_id: randomID(),
+            ts_ms: Int64(Date().timeIntervalSince1970 * 1000),
+            environment: environment,
+            level: .warning,
+            type: "anr",
+            platform: "ios",
+            sdk: CatchSDKInfo(name: "sankofa.ios", version: "ios-0.1.0"),
+            exception: exception,
+            message: nil,
+            distinct_id: sankofaSDK.distinctId,
+            anon_id: sankofaSDK.anonymousId,
+            session_id: sankofaSDK.currentSessionId,
+            tags: tags.isEmpty ? nil : tags,
+            user: user,
+            device: buildDeviceContext(),
+            release: releaseName,
+            breadcrumbs: breadcrumbs.snapshot(),
+            flag_snapshot: flagSnapshot?() ?? autoFlagSnapshot(),
+            config_snapshot: configSnapshot?() ?? autoConfigSnapshot(),
+            debug_meta: CatchDebugMetaCapture.capture()
+        )
+        queue.async(flags: .barrier) {
+            self.buffer.append(event)
+            self.persistToStorage()
+        }
     }
 
     // MARK: - Auto-discovery (Switch + Config snapshots)

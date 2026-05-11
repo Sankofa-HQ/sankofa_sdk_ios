@@ -64,6 +64,18 @@ public final class SankofaConfig: NSObject {
     /// Optional app version string sent in the Catch device context.
     public var appVersion: String?
 
+    /// Synchronous hook called AFTER an event has been composed but
+    /// BEFORE it's enqueued. Return the (possibly modified) event to
+    /// ship it; return `nil` to drop it entirely. Use for PII
+    /// scrubbing, noise filtering, or late tag enrichment.
+    public var beforeSend: BeforeSendFn?
+
+    /// Main-queue stall threshold in seconds. When the SDK observes
+    /// the main queue wedged for longer than this, it emits an `anr`
+    /// event with the stall duration. Set to `0` to disable.
+    /// Defaults to 2.0s matching Sentry's iOS SDK default.
+    @objc public var catchStallThresholdSeconds: Double
+
     // MARK: - Init
 
     @objc
@@ -79,7 +91,8 @@ public final class SankofaConfig: NSObject {
         enableCatch: Bool = true,
         catchEnvironment: String = "live",
         release: String? = nil,
-        appVersion: String? = nil
+        appVersion: String? = nil,
+        catchStallThresholdSeconds: Double = 2.0
     ) {
         self.endpoint = endpoint
         self.debug = debug
@@ -93,6 +106,7 @@ public final class SankofaConfig: NSObject {
         self.catchEnvironment = catchEnvironment
         self.release = release
         self.appVersion = appVersion
+        self.catchStallThresholdSeconds = catchStallThresholdSeconds
         super.init()
     }
 }

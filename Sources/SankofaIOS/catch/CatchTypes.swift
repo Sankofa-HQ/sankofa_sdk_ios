@@ -164,6 +164,103 @@ public struct CatchDeviceContext: Codable, Sendable {
     }
 }
 
+/// Synchronous hook called after an event has been composed but BEFORE
+/// the SDK enqueues it for transport. Return the (possibly modified)
+/// event to ship it; return `nil` to drop it entirely.
+///
+/// Use cases:
+///   - PII scrubbing (e.g. strip `event.user?.email`)
+///   - Noise filtering (e.g. drop known-benign exceptions)
+///   - Tag enrichment from app state unavailable at SDK init time
+///
+/// Throwing inside the hook is treated like returning the event
+/// unchanged — a host bug must never block the capture pipeline.
+public typealias BeforeSendFn = @Sendable (CatchEvent) -> CatchEvent?
+
+/// Sentry-style temporary scope. Mutations made via the callback in
+/// `SankofaCatch.shared.withScope(fn)` overlay onto the next captured
+/// event without polluting the global scope set via `setUser` /
+/// `setTags` / `setExtra`.
+///
+/// ```swift
+/// SankofaCatch.shared.withScope { scope in
+///     scope.setTag("checkout_step", "payment")
+///     scope.setExtra("cart_id", AnyCodable(cart.id))
+///     Sankofa.captureException(err)
+/// }
+/// // Outside the closure, those tags / extras are gone.
+/// ```
+public final class SankofaCatchScope: @unchecked Sendable {
+    fileprivate var scopeTags: [String: String] = [:]
+    fileprivate var scopeExtra: [String: AnyCodable] = [:]
+    fileprivate var scopeUser: CatchUserContext?
+    fileprivate var userTouched = false
+    fileprivate var scopeLevel: CatchLevel?
+    fileprivate var scopeFingerprint: [String]?
+
+    @discardableResult
+    public func setTag(_ key: String, _ value: String) -> SankofaCatchScope {
+        scopeTags[key] = value
+        return self
+    }
+
+    @discardableResult
+    public func setTags(_ tags: [String: String]) -> SankofaCatchScope {
+        for (k, v) in tags { scopeTags[k] = v }
+        return self
+    }
+
+    @discardableResult
+    public func setExtra(_ key: String, _ value: AnyCodable) -> SankofaCatchScope {
+        scopeExtra[key] = value
+        return self
+    }
+
+    @discardableResult
+    public func setUser(_ user: CatchUserContext?) -> SankofaCatchScope {
+        scopeUser = user
+        userTouched = true
+        return self
+    }
+
+    @discardableResult
+    public func setLevel(_ level: CatchLevel) -> SankofaCatchScope {
+        scopeLevel = level
+        return self
+    }
+
+    @discardableResult
+    public func setFingerprint(_ fingerprint: [String]) -> SankofaCatchScope {
+        scopeFingerprint = fingerprint
+        return self
+    }
+
+    /// Layer this scope on top of the caller's `options`. Caller
+    /// options take precedence (most specific wins).
+    public func applyTo(_ options: SankofaCatch.CaptureOptions) -> SankofaCatch.CaptureOptions {
+        var mergedTags = scopeTags
+        if let t = options.tags {
+            for (k, v) in t { mergedTags[k] = v }
+        }
+        var mergedExtra = scopeExtra
+        if let e = options.extra {
+            for (k, v) in e { mergedExtra[k] = v }
+        }
+        return SankofaCatch.CaptureOptions(
+            level: options.level ?? scopeLevel,
+            tags: mergedTags.isEmpty ? nil : mergedTags,
+            extra: mergedExtra.isEmpty ? nil : mergedExtra,
+            // User: caller wins, then scope. `userTouched` distinguishes
+            // "scope explicitly cleared user with setUser(nil)" from
+            // "scope never set user".
+            user: options.user ?? (userTouched ? scopeUser : nil),
+            fingerprint: options.fingerprint ?? scopeFingerprint,
+            trace_id: options.trace_id,
+            span_id: options.span_id
+        )
+    }
+}
+
 public struct CatchBreadcrumb: Codable, Sendable {
     public let ts_ms: Int64
     public let type: String

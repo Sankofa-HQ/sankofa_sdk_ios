@@ -200,7 +200,9 @@ public final class Sankofa: NSObject {
             _ = SankofaCatch.shared.start(
                 environment: config.catchEnvironment,
                 release: config.release,
-                appVersion: config.appVersion
+                appVersion: config.appVersion,
+                beforeSend: config.beforeSend,
+                stallThresholdSeconds: config.catchStallThresholdSeconds
             )
         }
 
@@ -700,6 +702,31 @@ extension Sankofa {
     public static func addBreadcrumb(_ crumb: CatchBreadcrumb) {
         guard SankofaCatch.shared.isStarted else { return }
         SankofaCatch.shared.addBreadcrumb(crumb)
+    }
+
+    /// Run `fn` with a temporary scope. Mutations made via the scope
+    /// (tags, extras, user, level, fingerprint) overlay onto any
+    /// `captureException` / `captureMessage` calls inside `fn`.
+    /// Outside `fn` the scope is gone — async captures deferred past
+    /// the closure's return will NOT see the scope.
+    ///
+    /// No-op when Catch isn't initialized; `fn` still runs with a sink
+    /// scope so host code that does work alongside captures isn't skipped.
+    ///
+    /// ```swift
+    /// Sankofa.withScope { scope in
+    ///     scope.setTag("flow", "checkout")
+    ///     scope.setExtra("cart_id", AnyCodable(cart.id))
+    ///     Sankofa.captureException(err)
+    /// }
+    /// ```
+    @discardableResult
+    public static func withScope<T>(_ fn: (SankofaCatchScope) throws -> T) rethrows -> T {
+        guard SankofaCatch.shared.isStarted else {
+            // Sink scope so host code still runs.
+            return try fn(SankofaCatchScope())
+        }
+        return try SankofaCatch.shared.withScope(fn)
     }
 
     /// Force-flush queued Catch events (e.g. before a known process exit).
