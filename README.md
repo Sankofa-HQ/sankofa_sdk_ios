@@ -1,25 +1,23 @@
 # Sankofa iOS SDK 🚀
 
 [![Swift Package Manager](https://img.shields.io/badge/SPM-compatible-brightgreen)](https://swift.org/package-manager/)
-[![Platform](https://img.shields.io/badge/Platform-iOS%2014%2B-blue)](https://developer.apple.com/ios/)
+[![Platform](https://img.shields.io/badge/Platform-iOS%2013%2B-blue)](https://developer.apple.com/ios/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Sankofa](https://img.shields.io/badge/Made%20with-Sankofa-blueviolet)](https://sankofa.dev)
 
-The official native iOS SDK for [Sankofa Analytics](https://sankofa.dev). Built entirely in Swift — no Objective-C, no swizzling, no UIKit injection.
+The official native iOS SDK for [Sankofa](https://sankofa.dev). Six products in one Swift framework: Analytics, Catch (Crashlytics + Sentry merged), Switch, Config, Pulse, Replay. Built entirely in Swift — no Objective-C, no swizzling, no UIKit injection.
 
 ---
 
 ## ✨ Features
 
-- **Event Tracking** — Custom events with arbitrary properties and automatic device metadata.
-- **Identity Management** — Resolve anonymous users to permanent profiles with `identify()` / `reset()`.
-- **Offline-First Queue** — SQLite-backed event queue (GRDB.swift) survives app termination and network failures.
-- **Dual-Engine Session Replay:**
-  - **Wireframe Mode** *(Default)* — JSON view-tree, zero pixel data, ultra-low bandwidth.
-  - **Screenshot Mode** — Pixel-perfect captures using **Ghost Masking** (CoreGraphics in-memory, zero UI flicker).
-- **Escalation Triggers** — Switch Wireframe → Screenshot automatically on key user events via remote config.
-- **Privacy First** — Auto-mask all `UITextField`/`UITextView`, manual masking via `.sankofaMask = true`.
-- **App Store Ready** — Includes `PrivacyInfo.xcprivacy`. No method swizzling. Passes App Store Review.
+- **Analytics** — events, identify, peopleSet. SQLite-backed (GRDB) offline-first queue.
+- **Catch** — `NSSetUncaughtExceptionHandler`, POSIX signal handlers (SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE/SIGTRAP/SIGSYS), and a **main-queue stall detector** auto-installed by `Sankofa.shared.initialize`. Sentry-style `withScope` + `beforeSend` hooks.
+- **Switch** — feature flags with bundled defaults, onChange listeners, halt webhook support.
+- **Config** — remote-config with typed accessors.
+- **Pulse** — in-app surveys.
+- **Session Replay** — wireframe + screenshot modes (Ghost Masking), automatic input masking, `view.sankofaMask = true`. **SwiftUI-aware** scroll-offset tagging via `Sankofa.shared.tagScrollContainer { ... }`.
+- **App Store Ready** — bundles `PrivacyInfo.xcprivacy`, no method swizzling.
 
 ---
 
@@ -34,13 +32,14 @@ https://github.com/Sankofa-HQ/sankofa_sdk_ios
 ```
 
 Or add to your `Package.swift`:
+
 ```swift
 .package(url: "https://github.com/Sankofa-HQ/sankofa_sdk_ios.git", from: "1.0.0")
 ```
 
 ### 2. Initialize
 
-In your `AppDelegate` or `@main` struct's entry point:
+One line. Catch auto-installs alongside analytics — no separate `SankofaCatch.shared.start(...)` call needed.
 
 ```swift
 import SankofaIOS
@@ -48,14 +47,21 @@ import SankofaIOS
 @main
 struct MyApp: App {
     init() {
-        Sankofa.shared.initialize(
-            apiKey: "YOUR_PROJECT_API_KEY",
-            config: SankofaConfig(
-                endpoint: "https://api.sankofa.dev",
-                recordSessions: true,
-                maskAllInputs: true
-            )
+        let config = SankofaConfig(
+            endpoint: "https://api.sankofa.dev",
+            recordSessions: true,
+            maskAllInputs: true,
+            catchEnvironment: "production",
+            release: "myapp@1.4.0",
+            appVersion: "1.4.0",
+            catchStallThresholdSeconds: 2.0  // main-queue stall threshold (0 disables)
         )
+        // Optional Sentry-style hook.
+        config.beforeSend = { event in
+            if event.message?.contains("[noise]") == true { return nil }
+            return event
+        }
+        Sankofa.shared.initialize(apiKey: "YOUR_PROJECT_API_KEY", config: config)
     }
     var body: some Scene { WindowGroup { ContentView() } }
 }
@@ -63,64 +69,75 @@ struct MyApp: App {
 
 ---
 
-## 📈 Tracking Events
+## 🛠 Usage
+
+### Analytics
 
 ```swift
-// Simple event
-Sankofa.shared.track("onboarding_completed")
-
-// Event with properties
 Sankofa.shared.track("purchase_completed", properties: [
     "item_id": "cam_001",
     "price": 120.50,
-    "currency": "USD"
 ])
-```
 
----
-
-## 👤 Identity & People
-
-```swift
-// On login — merges anonymous history with the known user
 Sankofa.shared.identify(userId: "user_99")
-
-// Set profile attributes
 Sankofa.shared.setPerson(
     name: "Jane Doe",
     email: "jane@example.com",
     properties: ["plan": "pro"]
 )
-
-// On logout — clears identity and rotates the session
-Sankofa.shared.reset()
 ```
 
----
+### Catch — Crashlytics + Sentry merged
 
-## 🎥 Session Replay & Privacy
-
-### Configuration
+Static helpers work from anywhere — no instance to thread through.
 
 ```swift
-SankofaConfig(
-    recordSessions: true,
-    maskAllInputs: true,          // Auto-mask all UITextField / UITextView
-    captureMode: .wireframe       // or .screenshot (Ghost Masking)
-)
+// Capture a handled error
+do {
+    try chargeCard(amount)
+} catch {
+    Sankofa.captureException(error)
+}
+
+// Crashlytics-style breadcrumb log — rides on next capture, doesn't bill.
+Sankofa.log("checkout: applying coupon SUMMER25")
+
+// Ambient context
+Sankofa.setUser(CatchUserContext(id: "u_42", email: "ada@example.com"))
+Sankofa.setTag("flow", "checkout")
+Sankofa.setExtra("cart_id", AnyCodable(cart.id))
+
+// Sentry-style temporary scope
+Sankofa.withScope { scope in
+    scope.setTag("checkout_step", "payment")
+    scope.setLevel(.warning)
+    Sankofa.captureException(err)
+}
 ```
 
-### Ghost Masking
+### SwiftUI scroll-offset tagging
 
-In Screenshot mode, Sankofa renders frames in-memory and masks sensitive fields before compression. The live screen is never modified — no UI injection, no overlays, no flicker.
-
-### Manual Privacy Masking
+UIKit scroll containers work automatically. For custom hosts / `LazyVGrid` / pre-iOS 16 SwiftUI, register a provider:
 
 ```swift
-import SankofaIOS
+struct ProductList: View {
+    @State private var scrollOffset: CGFloat = 0
+    @State private var handle: SankofaScrollContainerHandle?
 
-// Mark a view as sensitive
-mySecretView.sankofaMask = true
+    var body: some View {
+        ScrollView {
+            // ... content with a GeometryReader feeding scrollOffset
+        }
+        .onAppear { handle = Sankofa.shared.tagScrollContainer { scrollOffset } }
+        .onDisappear { handle?.remove() }
+    }
+}
+```
+
+### Session Replay — masking
+
+```swift
+mySecretView.sankofaMask = true  // Auto-masks this view in replays
 ```
 
 ---
@@ -128,28 +145,41 @@ mySecretView.sankofaMask = true
 ## 🛠 Configuration Reference
 
 | Option | Default | Description |
-| :--- | :--- | :--- |
+|---|---|---|
 | `endpoint` | `https://api.sankofa.dev` | Your Sankofa engine base URL |
-| `debug` | `false` | Enable verbose console output |
-| `trackLifecycleEvents` | `true` | Auto-track `$app_opened/backgrounded/terminated` |
-| `flushIntervalSeconds` | `30` | Event flush interval while foregrounded |
+| `debug` | `false` | Verbose console output |
+| `trackLifecycleEvents` | `true` | Auto-track app open / foregrounded / backgrounded |
+| `flushIntervalSeconds` | `30` | Foreground flush cadence |
 | `batchSize` | `50` | Events buffered before early flush |
 | `recordSessions` | `true` | Enable session replay |
-| `maskAllInputs` | `true` | Auto-mask all text inputs |
-| `captureMode` | `.wireframe` | Replay engine (`.wireframe` or `.screenshot`) |
+| `maskAllInputs` | `true` | Auto-mask all `UITextField` / `UITextView` |
+| `captureScale` | `0.35` | Replay screenshot resolution |
+| `enableCatch` | `true` | Auto-install Catch + NSException + signals + stall detector |
+| `catchEnvironment` | `"live"` | Environment tag on every Catch event |
+| `release` | `nil` | Release identifier (e.g. `"myapp@1.4.0"`) |
+| `appVersion` | `nil` | App-version override for Catch device context |
+| `beforeSend` | `nil` | Sentry-style hook; return `nil` to drop |
+| `catchStallThresholdSeconds` | `2.0` | Main-queue stall threshold (0 disables) |
 
 ---
 
 ## 📑 API Reference
 
 | Method | Description |
-| :--- | :--- |
-| `initialize(apiKey:config:)` | Initialise the SDK. Call once at app start. |
-| `identify(userId:)` | Link anonymous session to a known user. |
-| `track(_:properties:)` | Track a custom event. |
-| `setPerson(name:email:properties:)` | Set profile attributes. |
-| `reset()` | Clear identity and rotate session (call on logout). |
-| `flush()` | Force-upload all queued events immediately. |
+|---|---|
+| `Sankofa.shared.initialize(apiKey:config:)` | Initialize SDK + Catch + signal handlers + stall detector. |
+| `Sankofa.shared.track(_:properties:)` | Track a custom event. |
+| `Sankofa.shared.identify(userId:)` | Link anonymous → known user. |
+| `Sankofa.shared.setPerson(...)` | Set profile attributes. |
+| `Sankofa.shared.reset()` | Clear identity + rotate session. |
+| `Sankofa.shared.flush()` | Force-upload queued events. |
+| `Sankofa.captureException(_:)` | Capture a handled error (static). |
+| `Sankofa.captureMessage(_:)` | Non-error event. |
+| `Sankofa.log(_:[category:])` | Crashlytics-style breadcrumb. |
+| `Sankofa.setUser` / `setTag` / `setTags` / `setExtra` / `addBreadcrumb` | Ambient context. |
+| `Sankofa.withScope { scope in ... }` | Temporary scope overlay. |
+| `Sankofa.flushCatch()` | Force-flush Catch events. |
+| `Sankofa.shared.tagScrollContainer { offset }` | Register a SwiftUI / custom scroll-offset provider. |
 
 ---
 
@@ -158,6 +188,12 @@ mySecretView.sankofaMask = true
 - **No Objective-C swizzling** — lifecycle tracking uses `NotificationCenter`.
 - **Includes `PrivacyInfo.xcprivacy`** — required for App Store submission since Spring 2024.
 - **Ghost Masking** — screenshot mode never injects views or touches the live UI hierarchy.
+
+---
+
+## 📑 Documentation
+
+Full API reference and integration guides: [docs.sankofa.dev/sdks/ios](https://docs.sankofa.dev/sdks/ios/overview).
 
 ---
 
