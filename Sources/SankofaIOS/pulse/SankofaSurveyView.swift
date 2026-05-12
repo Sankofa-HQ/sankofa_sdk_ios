@@ -416,6 +416,7 @@ final class SankofaSurveyCoordinator: ObservableObject {
             surveyId: survey.id,
             respondent: SankofaPulseRespondent(),
             context: nil,
+            screen: Sankofa.shared.currentScreenName,
             submittedAt: nil,
             answers: answers
         )

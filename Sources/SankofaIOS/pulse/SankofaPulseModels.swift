@@ -387,6 +387,12 @@ public struct SankofaPulseSubmitPayload: Codable, Sendable {
     public let surveyId: String
     public let respondent: SankofaPulseRespondent
     public let context: SankofaPulseContext?
+    /// Active screen / route at submission time. First-class
+    /// cross-product correlation key — same value Heatmap, Catch,
+    /// and Replay use, so the dashboard can pivot between products
+    /// scoped to the same screen without scanning the loose context
+    /// blob.
+    public let screen: String?
     public let submittedAt: String?
     public let answers: [String: SankofaPulseAnyJSON]
 
@@ -394,12 +400,14 @@ public struct SankofaPulseSubmitPayload: Codable, Sendable {
         surveyId: String,
         respondent: SankofaPulseRespondent = SankofaPulseRespondent(),
         context: SankofaPulseContext? = nil,
+        screen: String? = nil,
         submittedAt: String? = nil,
         answers: [String: SankofaPulseAnyJSON]
     ) {
         self.surveyId = surveyId
         self.respondent = respondent
         self.context = context
+        self.screen = screen
         self.submittedAt = submittedAt
         self.answers = answers
     }
@@ -408,6 +416,7 @@ public struct SankofaPulseSubmitPayload: Codable, Sendable {
         case surveyId = "survey_id"
         case respondent
         case context
+        case screen
         case submittedAt = "submitted_at"
         case answers
     }

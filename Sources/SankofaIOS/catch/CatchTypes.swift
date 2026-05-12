@@ -382,6 +382,12 @@ public struct CatchEvent: Codable, Sendable {
     public var span_id: String?
     public var replay_chunk_index: Int?
     public var debug_meta: CatchDebugMeta?
+    /// Active screen / route at capture time. Cross-product
+    /// correlation key shared with Heatmap, Replay, Pulse, and Plan.
+    /// Sourced from `SankofaScreenTracker.findCurrentScreenName()`
+    /// (auto-detect via top view controller) or the explicit
+    /// `Sankofa.shared.screen()` call.
+    public var screen: String?
 
     public init(
         event_id: String,
@@ -408,7 +414,8 @@ public struct CatchEvent: Codable, Sendable {
         trace_id: String? = nil,
         span_id: String? = nil,
         replay_chunk_index: Int? = nil,
-        debug_meta: CatchDebugMeta? = nil
+        debug_meta: CatchDebugMeta? = nil,
+        screen: String? = nil
     ) {
         self.wire_version = CatchWire.version
         self.event_id = event_id
@@ -436,6 +443,7 @@ public struct CatchEvent: Codable, Sendable {
         self.span_id = span_id
         self.replay_chunk_index = replay_chunk_index
         self.debug_meta = debug_meta
+        self.screen = screen
     }
 }
 

@@ -480,6 +480,7 @@ public final class SankofaPulse {
             surveyId: payload.surveyId,
             respondent: respondent,
             context: buildPulseContext(),
+            screen: Sankofa.shared.currentScreenName,
             submittedAt: payload.submittedAt,
             answers: payload.answers
         )

@@ -416,7 +416,8 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
             trace_id: options.trace_id,
             span_id: options.span_id,
             replay_chunk_index: nil,
-            debug_meta: CatchDebugMetaCapture.capture()
+            debug_meta: CatchDebugMetaCapture.capture(),
+            screen: sankofaSDK.currentScreenName
         )
 
         // beforeSend hook — host gets final say. A nil return drops

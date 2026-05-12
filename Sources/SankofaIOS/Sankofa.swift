@@ -90,6 +90,20 @@ public final class Sankofa: NSObject {
     /// `SankofaSessionManager` for the exact policy.
     public var currentSessionId: String { sessionManager.sessionId }
 
+    /// The active screen / route as the SDK currently knows it.
+    /// Resolution: explicit `screen(name)` > auto-detected top view
+    /// controller > nil. Cross-product correlation key shared with
+    /// Heatmap, Replay, Pulse, Plan, and Catch — Catch reads this on
+    /// every error capture so the dashboard can filter and link by
+    /// screen without depending on breadcrumbs.
+    public var currentScreenName: String? {
+        if currentScreen != "Unknown" && !currentScreen.isEmpty {
+            return currentScreen
+        }
+        let auto = SankofaScreenTracker.findCurrentScreenName()
+        return (auto?.isEmpty ?? true) ? nil : auto
+    }
+
     /// The device-scoped anonymous identifier. Stable across app
     /// launches until the user uninstalls.
     public var anonymousId: String { identity.anonymousId }
