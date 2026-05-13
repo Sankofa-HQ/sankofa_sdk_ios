@@ -132,6 +132,11 @@ public final class Sankofa: NSObject {
     @MainActor private var lifecycleObserver: SankofaLifecycleObserver?
     @MainActor private var captureCoordinator: SankofaCaptureCoordinator?
     private var presenceHeartbeat: SankofaPresenceHeartbeat?
+    /// Dedicated heatmap-background snapshotter. Independent of the
+    /// replay frame stream — fires one stability-gated capture per
+    /// screen per session so the dashboard's heatmap renders over a
+    /// fully-loaded view instead of a mid-load frame.
+    private var heatmapSnapshotter: SankofaHeatmapSnapshotter?
 
     // MARK: - Public API
 
@@ -190,6 +195,24 @@ public final class Sankofa: NSObject {
             }
         )
         self.lifecycleObserver = observer
+
+        // Heatmap snapshotter: enabled by default whenever recording
+        // is on (matches Catch + Replay's "implicit" install).
+        // Lightweight — schedules at most one delayed task per screen
+        // tag on a utility queue, capture itself bounded by the
+        // viewport draw call (under 1 frame on modern devices).
+        if config.recordSessions {
+            let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            let appVersionForHeatmap = bundleVersion ?? config.appVersion ?? "unknown"
+            self.heatmapSnapshotter = SankofaHeatmapSnapshotter(
+                apiKey: apiKey,
+                endpoint: config.endpoint,
+                appVersion: appVersionForHeatmap,
+                captureScale: max(config.captureScale, 0.5),
+                maskAllInputs: config.maskAllInputs,
+                logger: logger
+            )
+        }
 
         logger.log("✅ [v2] Sankofa initialized (endpoint: \(config.endpoint))")
 
@@ -295,6 +318,10 @@ public final class Sankofa: NSObject {
             sessionId: sessionManager.sessionId,
             properties: properties
         )
+        // Schedule a stability-gated heatmap snapshot for this screen.
+        // No-op on subsequent tags of the same screen this session
+        // (deduped inside the snapshotter).
+        heatmapSnapshotter?.scheduleCapture(for: name)
     }
 
     /// Register a callback that returns the current scroll offset (in
