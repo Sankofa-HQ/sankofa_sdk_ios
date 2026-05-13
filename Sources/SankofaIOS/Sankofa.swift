@@ -284,6 +284,17 @@ public final class Sankofa: NSObject {
         var screenProps = properties
         screenProps["$screen_name"] = name
         track("$screen_view", properties: screenProps)
+        // Canonical screen signal — fires regardless of which Sankofa
+        // products the host has enabled, so the lexicon + dwell +
+        // presence are always populated.
+        SankofaScreenSeen.shared.emit(
+            endpoint: config.endpoint,
+            apiKey: apiKey,
+            screen: name,
+            distinctId: identity.distinctId,
+            sessionId: sessionManager.sessionId,
+            properties: properties
+        )
     }
 
     /// Register a callback that returns the current scroll offset (in
