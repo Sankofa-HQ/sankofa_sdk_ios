@@ -131,6 +131,7 @@ public final class Sankofa: NSObject {
     private var flushManager: SankofaFlushManager?
     @MainActor private var lifecycleObserver: SankofaLifecycleObserver?
     @MainActor private var captureCoordinator: SankofaCaptureCoordinator?
+    private var presenceHeartbeat: SankofaPresenceHeartbeat?
 
     // MARK: - Public API
 
@@ -222,6 +223,26 @@ public final class Sankofa: NSObject {
 
         observer.start()
         fm.start()
+
+        // Live-presence heartbeat — independent of analytics flush so
+        // it ticks at its own cadence (15s) while the app is
+        // foregrounded. Cheap one-tiny-POST-per-tick; paused on
+        // background.
+        if let pulse = SankofaPresenceHeartbeat(
+            endpoint: config.endpoint,
+            apiKey: apiKey,
+            payloadProvider: { [weak self] in
+                guard let self = self else { return (nil, nil, nil) }
+                return (
+                    screen: self.currentScreenName,
+                    distinctId: self.distinctId,
+                    sessionId: self.currentSessionId
+                )
+            }
+        ) {
+            self.presenceHeartbeat = pulse
+            pulse.start()
+        }
 
         if config.recordSessions {
             coordinator.start(sessionId: sessionManager.sessionId, screenNameProvider: { [weak self] in
