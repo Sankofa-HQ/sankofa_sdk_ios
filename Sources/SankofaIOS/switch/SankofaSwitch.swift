@@ -87,6 +87,36 @@ public final class SankofaSwitch: NSObject, SankofaPluggableModule, @unchecked S
         fire(changed: changed, removed: removed)
     }
 
+    /// Self-audit the host's Switch wiring. Mirrors the other SDKs.
+    public func checkIntegration() -> ModuleIntegrationStatus {
+        var missing: [String] = []
+        var warnings: [String] = []
+
+        queue.sync {
+            if flags.isEmpty && defaults.isEmpty {
+                missing.append(
+                    "No flags from server and no bundled defaults supplied. Every getFlag(key) returns the inline fallback value."
+                )
+            } else if flags.isEmpty {
+                warnings.append(
+                    "No flags from server yet — handshake may not have completed, or the project has no flags. Defaults will be used."
+                )
+            }
+            if etag.isEmpty {
+                warnings.append(
+                    "No etag stored — the SDK cannot short-circuit handshakes with If-None-Match."
+                )
+            }
+        }
+
+        return ModuleIntegrationStatus(
+            module: "switch",
+            level: ModuleIntegrationStatus.deriveLevel(missing: missing),
+            missing: missing,
+            warnings: warnings
+        )
+    }
+
     // MARK: - Public API
 
     /// Returns the boolean value for a flag. Boolean flags return their

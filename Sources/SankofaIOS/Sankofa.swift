@@ -672,15 +672,38 @@ public final class Sankofa: NSObject {
             let resolvedAppVersion: String = appVersionFromHost
                 ? hostAppVersion
                 : (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
-            let status = IntegrationAudit.audit(
+            let analyticsStatus = IntegrationAudit.audit(
                 handshakeOk: true,
                 appVersionFromHost: appVersionFromHost
             )
+            var batch: [ModuleIntegrationStatus] = [analyticsStatus]
+
+            // Each module's audit is wrapped so a single broken module
+            // can't take down the rest of the batch. ModuleRegistry only
+            // contains modules whose register() ran — uninitialised
+            // singletons (host never used them) are absent and so not
+            // audited at all.
+            let registry = SankofaModuleRegistry.shared
+            if registry.has(.catchModule) {
+                batch.append(SankofaCatch.shared.checkIntegration())
+            }
+            if registry.has(.switchModule) {
+                batch.append(SankofaSwitch.shared.checkIntegration())
+            }
+            if registry.has(.configModule) {
+                batch.append(SankofaRemoteConfig.shared.checkIntegration())
+            }
+            if #available(iOS 14.0, macOS 11.0, *) {
+                if registry.has(.pulseModule) {
+                    batch.append(SankofaPulse.shared.checkIntegration())
+                }
+            }
+
             IntegrationReporter.report(
                 baseEndpoint: endpoint,
                 apiKey: apiKey,
                 appVersion: resolvedAppVersion,
-                statuses: [status],
+                statuses: batch,
                 debug: self.config.debug,
                 log: { [weak self] msg in self?.logger.log(msg) }
             )

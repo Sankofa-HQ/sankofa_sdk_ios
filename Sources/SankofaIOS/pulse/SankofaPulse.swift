@@ -84,6 +84,35 @@ public final class SankofaPulse {
         return true
     }
 
+    /// Self-audit the host's Pulse wiring. Mirrors the other SDKs.
+    public func checkIntegration() -> ModuleIntegrationStatus {
+        var missing: [String] = []
+        var warnings: [String] = []
+
+        if !registered {
+            missing.append(
+                "SankofaPulse.shared.register() has not succeeded yet. Call register() AFTER Sankofa.shared.initialize() returns."
+            )
+        }
+        if client == nil {
+            missing.append(
+                "SankofaPulseClient was not constructed — usually means register() ran before the host had an apiKey / endpoint."
+            )
+        }
+        if registered && cachedSurveys.isEmpty {
+            warnings.append(
+                "No surveys cached yet — first refresh may still be in flight, or no surveys are published in the project."
+            )
+        }
+
+        return ModuleIntegrationStatus(
+            module: "pulse",
+            level: ModuleIntegrationStatus.deriveLevel(missing: missing),
+            missing: missing,
+            warnings: warnings
+        )
+    }
+
     // MARK: - Public reads
 
     // MARK: - Lifecycle event subscriptions

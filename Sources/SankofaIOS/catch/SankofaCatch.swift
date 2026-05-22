@@ -270,6 +270,53 @@ public final class SankofaCatch: NSObject, SankofaPluggableModule, @unchecked Se
         }
     }
 
+    /// Self-audit the host's Catch wiring. Mirrors the other SDKs —
+    /// minimal but real checks that the dashboard SDK Health surface
+    /// can render.
+    public func checkIntegration() -> ModuleIntegrationStatus {
+        var missing: [String] = []
+        var warnings: [String] = []
+
+        var startedLocal = false
+        var enabledLocal = true
+        var handlerInstalledLocal = false
+        var rateLocal = 1.0
+        queue.sync {
+            startedLocal = self.started
+            enabledLocal = self.enabled
+            handlerInstalledLocal = self.handlerInstalled
+            rateLocal = self.errorSampleRate
+        }
+
+        if !startedLocal {
+            missing.append(
+                "SankofaCatch.shared.start(...) has not been called. Call it from your AppDelegate / SceneDelegate after Sankofa.shared.initialize()."
+            )
+        }
+        if !enabledLocal {
+            missing.append(
+                "Catch is disabled by the server-side handshake. Open Project Settings → Catch in the dashboard or check the org plan tier."
+            )
+        }
+        if !handlerInstalledLocal {
+            warnings.append(
+                "NSUncaughtExceptionHandler is not installed — only manually captured errors will surface. Call start(captureUnhandled: true)."
+            )
+        }
+        if rateLocal <= 0 {
+            warnings.append(
+                "errorSampleRate is \(rateLocal) — every captured event will be sampled out."
+            )
+        }
+
+        return ModuleIntegrationStatus(
+            module: "catch",
+            level: ModuleIntegrationStatus.deriveLevel(missing: missing),
+            missing: missing,
+            warnings: warnings
+        )
+    }
+
     // MARK: - Public API
 
     @discardableResult

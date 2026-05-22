@@ -69,6 +69,36 @@ public final class SankofaRemoteConfig: NSObject, SankofaPluggableModule, @unche
         fire(changed: changed, removed: removed)
     }
 
+    /// Self-audit the host's Remote Config wiring. Mirrors the other SDKs.
+    public func checkIntegration() -> ModuleIntegrationStatus {
+        var missing: [String] = []
+        var warnings: [String] = []
+
+        queue.sync {
+            if values.isEmpty && defaults.isEmpty {
+                missing.append(
+                    "No values from server and no bundled defaults supplied. Every get(key, default:) returns the inline fallback."
+                )
+            } else if values.isEmpty {
+                warnings.append(
+                    "No values from server yet — handshake may not have completed, or the project has no config items. Defaults will be used."
+                )
+            }
+            if etag.isEmpty {
+                warnings.append(
+                    "No etag stored — the SDK cannot short-circuit handshakes with If-None-Match."
+                )
+            }
+        }
+
+        return ModuleIntegrationStatus(
+            module: "config",
+            level: ModuleIntegrationStatus.deriveLevel(missing: missing),
+            missing: missing,
+            warnings: warnings
+        )
+    }
+
     // MARK: - Public API (typed reads)
 
     /// Typed lookup. Returns `defaultValue` on:
