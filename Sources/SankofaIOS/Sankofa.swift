@@ -662,6 +662,28 @@ public final class Sankofa: NSObject {
                let hasUpdate = deploy["has_update"] as? Bool, hasUpdate {
                 self.logger.log("📦 Deploy update available: \(deploy["label"] ?? "?")")
             }
+
+            // ── Reverse handshake — SDK Health report ──
+            // Audit the host's integration and POST the result to
+            // /api/v1/handshake/integrations so the dashboard's SDK
+            // Health surface reflects this iOS host. Errors swallowed.
+            let hostAppVersion = self.config.appVersion ?? ""
+            let appVersionFromHost = !hostAppVersion.isEmpty
+            let resolvedAppVersion: String = appVersionFromHost
+                ? hostAppVersion
+                : (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
+            let status = IntegrationAudit.audit(
+                handshakeOk: true,
+                appVersionFromHost: appVersionFromHost
+            )
+            IntegrationReporter.report(
+                baseEndpoint: endpoint,
+                apiKey: apiKey,
+                appVersion: resolvedAppVersion,
+                statuses: [status],
+                debug: self.config.debug,
+                log: { [weak self] msg in self?.logger.log(msg) }
+            )
         }.resume()
     }
 }
