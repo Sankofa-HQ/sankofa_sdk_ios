@@ -1,7 +1,7 @@
 # Sankofa iOS SDK 🚀
 
 [![Swift Package Manager](https://img.shields.io/badge/SPM-compatible-brightgreen)](https://swift.org/package-manager/)
-[![Platform](https://img.shields.io/badge/Platform-iOS%2013%2B-blue)](https://developer.apple.com/ios/)
+[![Platform](https://img.shields.io/badge/Platform-iOS%2014%2B-blue)](https://developer.apple.com/ios/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Sankofa](https://img.shields.io/badge/Made%20with-Sankofa-blueviolet)](https://sankofa.dev)
 

@@ -3,7 +3,7 @@ Pod::Spec.new do |s|
   s.version          = '1.0.0'
   s.summary          = 'Sankofa iOS SDK — event tracking, session replay, heatmaps.'
   s.homepage         = 'https://sankofa.dev'
-  s.license          = { type: 'MIT' }
+  s.license          = { type: 'MIT', file: 'LICENSE' }
   s.authors          = { 'Sankofa Team' => 'hello@sankofa.dev' }
   s.source           = { git: 'https://github.com/Sankofa-HQ/sankofa_sdk_ios.git', tag: "v#{s.version}" }
   s.swift_version    = '5.9'

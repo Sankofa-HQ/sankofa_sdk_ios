@@ -100,7 +100,13 @@ public final class Sankofa: NSObject {
         if currentScreen != "Unknown" && !currentScreen.isEmpty {
             return currentScreen
         }
-        let auto = SankofaScreenTracker.findCurrentScreenName()
+        // findCurrentScreenName() walks the UIKit window hierarchy and is
+        // @MainActor. currentScreenName is read from arbitrary threads
+        // (Catch captures errors off the main thread), so only attempt the
+        // live lookup when we're already on main; otherwise fall through to
+        // nil rather than touching UIKit off-main.
+        guard Thread.isMainThread else { return nil }
+        let auto = MainActor.assumeIsolated { SankofaScreenTracker.findCurrentScreenName() }
         return (auto?.isEmpty ?? true) ? nil : auto
     }
 
@@ -694,7 +700,10 @@ public final class Sankofa: NSObject {
                 batch.append(SankofaRemoteConfig.shared.checkIntegration())
             }
             if #available(iOS 14.0, macOS 11.0, *) {
-                if registry.has(.pulseModule) {
+                // Pulse is self-contained — it tracks its own registration
+                // rather than registering with SankofaModuleRegistry, so we
+                // gate on its own state instead of `registry.has(...)`.
+                if SankofaPulse.shared.isRegistered {
                     batch.append(SankofaPulse.shared.checkIntegration())
                 }
             }

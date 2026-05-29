@@ -264,6 +264,14 @@ public struct SankofaPulseSurveySummary: Codable, Sendable, Identifiable, Hashab
         self.displayCooldownSeconds = displayCooldownSeconds
         self.displayDelayMs = displayDelayMs
     }
+
+    // Identity-based equality / hashing, mirroring `SankofaPulseSurvey`.
+    // Members like `targetingRules` aren't Hashable, and two summaries
+    // with the same `id` are the same survey regardless of rule churn.
+    public static func == (lhs: SankofaPulseSurveySummary, rhs: SankofaPulseSurveySummary) -> Bool {
+        lhs.id == rhs.id
+    }
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 public struct SankofaPulseSurveysResponse: Codable, Sendable {

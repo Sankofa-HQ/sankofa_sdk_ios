@@ -84,6 +84,12 @@ public final class SankofaPulse {
         return true
     }
 
+    /// Whether `register()` has succeeded. Pulse is self-contained
+    /// (it doesn't register with `SankofaModuleRegistry` like the
+    /// pluggable modules do), so the health reporter reads this to
+    /// decide whether to include Pulse in the integration report.
+    public var isRegistered: Bool { registered }
+
     /// Self-audit the host's Pulse wiring. Mirrors the other SDKs.
     public func checkIntegration() -> ModuleIntegrationStatus {
         var missing: [String] = []
