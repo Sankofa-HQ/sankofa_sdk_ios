@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'SankofaIOS'
-  s.version          = '1.0.0'
+  s.version          = '1.0.1'
   s.summary          = 'Sankofa iOS SDK — event tracking, session replay, heatmaps.'
   s.homepage         = 'https://sankofa.dev'
   s.license          = { type: 'MIT', file: 'LICENSE' }

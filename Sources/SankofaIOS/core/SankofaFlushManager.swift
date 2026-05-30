@@ -227,11 +227,18 @@ final class SankofaFlushManager {
                 if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                     self?.logger.log("✅ Replay chunk uploaded")
                     continuation.resume(returning: pendingIds)
+                } else if let http = response as? HTTPURLResponse,
+                          (400...499).contains(http.statusCode),
+                          http.statusCode != 408, http.statusCode != 429 {
+                    // Permanent rejection — drop this chunk rather than retry
+                    // a poison chunk forever (replay tolerates a missing frame).
+                    self?.logger.warn("⚠️ Replay chunk rejected (HTTP \(http.statusCode)) — dropping")
+                    continuation.resume(returning: pendingIds)
                 } else {
                     if let error = error {
-                        self?.logger.warn("❌ Replay upload error: \(error.localizedDescription)")
+                        self?.logger.warn("❌ Replay upload error (retry): \(error.localizedDescription)")
                     } else if let http = response as? HTTPURLResponse {
-                        self?.logger.warn("❌ Replay upload rejected (HTTP \(http.statusCode))")
+                        self?.logger.warn("❌ Replay upload HTTP \(http.statusCode) (retry)")
                     }
                     continuation.resume(returning: [])
                 }
@@ -279,11 +286,20 @@ final class SankofaFlushManager {
                     }
                     
                     continuation.resume(returning: pendingIds)
+                } else if let http = response as? HTTPURLResponse,
+                          (400...499).contains(http.statusCode),
+                          http.statusCode != 408, http.statusCode != 429 {
+                    // Permanent client error (malformed/oversized/rejected) —
+                    // drop the batch so one poison event can't wedge the queue.
+                    self?.logger.warn("⚠️ Batch rejected (HTTP \(http.statusCode)) — dropping \(pendingIds.count) event(s)")
+                    continuation.resume(returning: pendingIds)
                 } else {
+                    // 5xx / 408 / 429 / network — retain for retry (attempt
+                    // counter caps this so it can't retry forever).
                     if let error = error {
-                        self?.logger.warn("❌ Batch flush error: \(error.localizedDescription)")
+                        self?.logger.warn("❌ Batch flush error (retry): \(error.localizedDescription)")
                     } else if let http = response as? HTTPURLResponse {
-                        self?.logger.warn("❌ Batch flush rejected (HTTP \(http.statusCode))")
+                        self?.logger.warn("❌ Batch flush HTTP \(http.statusCode) (retry)")
                     }
                     continuation.resume(returning: [])
                 }

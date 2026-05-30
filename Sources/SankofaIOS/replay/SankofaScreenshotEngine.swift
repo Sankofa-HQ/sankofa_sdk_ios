@@ -120,12 +120,41 @@ final class SankofaScreenshotEngine: SankofaCaptureEngine {
         return rects
     }
 
+    /// React Native renders ALL visible <Text> via these plain UIView
+    /// subclasses (old arch: RCTTextView; new arch: RCTParagraphComponentView),
+    /// which the UITextField/UITextView checks miss — so RN text (balances,
+    /// names, OTP codes) would otherwise be captured in the clear. Matched by
+    /// class name so the SDK needn't link React; a no-op in pure-UIKit apps.
+    private static let sensitiveTextClassPrefixes = [
+        "RCTTextView",
+        "RCTParagraphComponentView",
+    ]
+    /// WebViews render arbitrary login / OAuth / payment / PII content that
+    /// can't be reasoned about, so the whole host view is masked by default.
+    private static let webViewClassSubstrings = [
+        "WKWebView",
+        "UIWebView",
+        "RNCWebView",
+        "SFSafariView",
+    ]
+
     private func collectRectsRecursively(view: UIView, window: UIWindow, rects: inout [CGRect]) {
         let isSensitive: Bool = {
             if maskAllInputs && (view is UITextField || view is UITextView) { return true }
             if view is UISwitch { return true }
             if (view.layer.value(forKey: SankofaMaskKey) as? Bool) == true { return true }
             if (view.tag == SankofaMaskTagValue) { return true }
+            if maskAllInputs {
+                // React Native text + WebViews — matched by class name since
+                // the SDK doesn't link React/WebKit. No-op in pure UIKit apps.
+                let className = NSStringFromClass(type(of: view))
+                for prefix in Self.sensitiveTextClassPrefixes where className.hasPrefix(prefix) {
+                    return true
+                }
+                for sub in Self.webViewClassSubstrings where className.contains(sub) {
+                    return true
+                }
+            }
             return false
         }()
 
