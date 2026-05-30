@@ -44,6 +44,34 @@ public final class SankofaPulse {
     /// without fetching a full bundle for every cached survey.
     private var cachedTargeting: [String: [SankofaPulseTargetingRule]] = [:]
 
+    /// Per-survey display behaviour (auto_show / cooldown / delay) from
+    /// the list endpoint, kept alongside `cachedTargeting` so the
+    /// auto-show pump can gate presentation. Defaults applied when absent.
+    private var cachedDisplay: [String: SurveyDisplay] = [:]
+
+    /// Surveys already auto-presented this process lifetime — belt-and-
+    /// suspenders against re-presenting when a survey has a zero cooldown.
+    private var autoShownThisSession: Set<String> = []
+
+    /// NotificationCenter tokens for the auto-show triggers (foreground +
+    /// screen change). Held so they can be detached if ever needed.
+    private var autoShowObservers: [NSObjectProtocol] = []
+
+    /// Host opt-out for automatic presentation. Set BEFORE `register()`.
+    /// Mirrors the web `pulsePlugin({ autoShow: false })` switch.
+    public var autoShowEnabled: Bool = true
+
+    /// Default dismiss cooldown when the server omits one — 7 days,
+    /// matching the dashboard default and the web/RN SDKs.
+    static let defaultCooldownSeconds = 7 * 24 * 60 * 60
+
+    /// Dashboard-controlled display behaviour for one survey.
+    struct SurveyDisplay {
+        let autoShow: Bool
+        let cooldownSeconds: Int
+        let delayMs: Int
+    }
+
     /// In-flight partial-save task. Coalesce on a 750ms debounce so
     /// a fast-clicking respondent who skips through several questions
     /// only burns one save call; the latest pending state always wins.
@@ -80,6 +108,9 @@ public final class SankofaPulse {
             self.queue = SankofaPulseQueue(storeURL: store)
         }
         self.registered = true
+        #if canImport(UIKit)
+        Task { @MainActor in self.startAutoShowObservers() }
+        #endif
         Task { await refreshSurveys() }
         return true
     }
@@ -194,15 +225,26 @@ public final class SankofaPulse {
                     uniqueKeysWithValues: summaries.map {
                         ($0.id, $0.targetingRules)
                     })
+                let display = Dictionary(
+                    uniqueKeysWithValues: summaries.map {
+                        ($0.id, SurveyDisplay(
+                            autoShow: $0.autoShow,
+                            cooldownSeconds: $0.displayCooldownSeconds,
+                            delayMs: $0.displayDelayMs))
+                    })
                 await MainActor.run {
                     self.cachedSurveys = surveys
                     self.cachedTargeting = rules
+                    self.cachedDisplay = display
+                    self.maybeAutoShow()
                 }
             } else {
                 let r = try await client.handshake()
                 await MainActor.run {
                     self.cachedSurveys = r.surveys
                     self.cachedTargeting = [:]
+                    self.cachedDisplay = [:]
+                    self.maybeAutoShow()
                 }
             }
             // Drain any queued submissions while we have a working
@@ -418,6 +460,9 @@ public final class SankofaPulse {
             }
         }
         let onDismiss: () -> Void = { [weak self, weak presenter] in
+            // Stamp the dismiss so the auto-show pump honours the
+            // per-survey cooldown and doesn't re-present immediately.
+            self?.stampDismiss(surveyId: surveyId)
             self?.emit(SankofaPulseEventPayload(
                 event: .surveyDismissed, surveyId: surveyId))
             // Keep the partial intact for resume — that's the point.
@@ -467,6 +512,136 @@ public final class SankofaPulse {
             event: .surveyShown, surveyId: surveyId))
     }
     #endif
+
+    // MARK: - Auto-show
+
+    /// Re-evaluate auto-show. Mirrors the web plugin's pump: pick the
+    /// first eligible survey flagged `auto_show` that isn't inside its
+    /// dismiss cooldown, then present it (after `display_delay_ms`) from
+    /// the top-most view controller. Safe to call repeatedly — it's a
+    /// no-op while a survey is already on screen or nothing's eligible.
+    /// Fires automatically on register, after each fetch, on app
+    /// foreground, and on screen change; opt out with `autoShowEnabled`.
+    @MainActor
+    public func maybeAutoShow() {
+        #if canImport(UIKit)
+        guard registered, autoShowEnabled else { return }
+        // Don't stack on top of a survey that's already presented.
+        guard let top = topViewController(),
+              top.presentedViewController == nil else { return }
+        let respondent = Sankofa.shared.distinctId
+        activeMatchingSurveys { [weak self] surveys in
+            guard let self = self else { return }
+            // activeMatchingSurveys delivers on the main thread (sync when
+            // surveys are cached, via MainActor.run otherwise).
+            MainActor.assumeIsolated {
+                let candidate = surveys.first { s in
+                    if self.autoShownThisSession.contains(s.id) { return false }
+                    let d = self.cachedDisplay[s.id]
+                    guard (d?.autoShow ?? true) else { return false }
+                    let cooldown = d?.cooldownSeconds ?? Self.defaultCooldownSeconds
+                    return !self.isRecentlyDismissed(
+                        surveyId: s.id,
+                        respondentId: respondent,
+                        cooldownSeconds: cooldown)
+                }
+                guard let candidate = candidate else { return }
+                let delayMs = self.cachedDisplay[candidate.id]?.delayMs ?? 0
+                let presentNow: () -> Void = { [weak self] in
+                    guard let self = self,
+                          let top = self.topViewController(),
+                          top.presentedViewController == nil else { return }
+                    self.autoShownThisSession.insert(candidate.id)
+                    self.show(surveyId: candidate.id, from: top)
+                }
+                if delayMs > 0 {
+                    DispatchQueue.main.asyncAfter(
+                        deadline: .now() + .milliseconds(delayMs),
+                        execute: presentNow)
+                } else {
+                    presentNow()
+                }
+            }
+        }
+        #endif
+    }
+
+    #if canImport(UIKit)
+    /// Wire the triggers that re-evaluate auto-show: app foreground and
+    /// the core's screen-change notification. Idempotent; called once
+    /// from `register()`.
+    @MainActor
+    private func startAutoShowObservers() {
+        guard autoShowObservers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        // Reference the singleton inside the @Sendable observer block
+        // rather than capturing `self` (SankofaPulse isn't Sendable).
+        let onForeground = nc.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { SankofaPulse.shared.maybeAutoShow() }
+            }
+        let onScreen = nc.addObserver(
+            forName: SankofaNotifications.screenChanged,
+            object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { SankofaPulse.shared.maybeAutoShow() }
+            }
+        autoShowObservers = [onForeground, onScreen]
+    }
+
+    /// The top-most view controller across the foreground-active scene,
+    /// walking the presented-controller chain. Auto-show needs a
+    /// presenter and SwiftUI doesn't hand one out.
+    private func topViewController() -> UIViewController? {
+        func top(from window: UIWindow) -> UIViewController? {
+            var vc = window.rootViewController
+            while let presented = vc?.presentedViewController { vc = presented }
+            return vc
+        }
+        let scenes = UIApplication.shared.connectedScenes
+        // Prefer the foreground-active scene's key window.
+        for scene in scenes {
+            guard let ws = scene as? UIWindowScene,
+                  ws.activationState == .foregroundActive else { continue }
+            for window in ws.windows where window.isKeyWindow {
+                if let vc = top(from: window) { return vc }
+            }
+        }
+        // Fallback: any key window.
+        for scene in scenes {
+            guard let ws = scene as? UIWindowScene else { continue }
+            for window in ws.windows where window.isKeyWindow {
+                if let vc = top(from: window) { return vc }
+            }
+        }
+        return nil
+    }
+    #endif
+
+    // MARK: - Dismiss cooldown (mirrors web `sankofa.pulse.dismissed.*`)
+
+    private func dismissKey(surveyId: String, respondentId: String) -> String {
+        "sankofa.pulse.dismissed.\(respondentId).\(surveyId)"
+    }
+
+    /// Whether `surveyId` was dismissed within its cooldown window for
+    /// the current respondent. A non-positive cooldown never suppresses.
+    private func isRecentlyDismissed(
+        surveyId: String, respondentId: String, cooldownSeconds: Int
+    ) -> Bool {
+        guard cooldownSeconds > 0 else { return false }
+        let ts = UserDefaults.standard.double(
+            forKey: dismissKey(surveyId: surveyId, respondentId: respondentId))
+        guard ts > 0 else { return false }
+        return Date().timeIntervalSince1970 - ts < Double(cooldownSeconds)
+    }
+
+    private func stampDismiss(surveyId: String) {
+        let respondent = Sankofa.shared.distinctId
+        UserDefaults.standard.set(
+            Date().timeIntervalSince1970,
+            forKey: dismissKey(surveyId: surveyId, respondentId: respondent))
+    }
 
     // MARK: - Submission
 

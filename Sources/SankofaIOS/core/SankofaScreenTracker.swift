@@ -1,5 +1,14 @@
 import UIKit
 
+/// Cross-module notifications posted by the Sankofa core.
+public enum SankofaNotifications {
+    /// Posted by `Sankofa.shared.screen(_:)` right after the current
+    /// screen changes. `userInfo["screen"]` carries the screen name.
+    /// Pulse observes this to re-evaluate auto-show on navigation —
+    /// the iOS analogue of the web pump's SPA-navigation trigger.
+    public static let screenChanged = Notification.Name("dev.sankofa.screen.changed")
+}
+
 /// Automatic screen detection for iOS.
 /// Traverses the view controller hierarchy to find the top-most visible controller.
 final class SankofaScreenTracker {

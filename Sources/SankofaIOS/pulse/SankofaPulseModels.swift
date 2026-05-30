@@ -163,6 +163,30 @@ public struct SankofaPulseSurvey: Codable, Sendable, Identifiable, Hashable {
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
+// Custom decoding lives in an extension so the synthesized memberwise
+// init (used by `refreshSurveys` and the bundle decoder) is preserved.
+extension SankofaPulseSurvey {
+    enum CodingKeys: String, CodingKey {
+        case id, kind, name, description, questions, theme
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        // The bundle endpoint returns the raw survey ROW, where `questions`
+        // are a SIBLING of `survey` (not nested), and the handshake shape can
+        // omit them too. A non-optional decode here threw keyNotFound and made
+        // loadSurveyBundle fail — so show()/auto-show silently never presented.
+        self.questions = try c.decodeIfPresent(
+            [SankofaPulseQuestion].self, forKey: .questions) ?? []
+        // Unknown/future survey kinds must not fail the whole decode.
+        self.kind = (try? c.decode(SankofaPulseSurveyKind.self, forKey: .kind)) ?? .custom
+        self.name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        self.description = try c.decodeIfPresent(String.self, forKey: .description)
+        self.theme = try c.decodeIfPresent(SankofaPulseTheme.self, forKey: .theme)
+    }
+}
+
 public struct SankofaPulseTheme: Codable, Sendable, Hashable {
     public let primaryColor: String?
     public let backgroundColor: String?
@@ -229,7 +253,9 @@ public struct SankofaPulseSurveySummary: Codable, Sendable, Identifiable, Hashab
         self.id = try c.decode(String.self, forKey: .id)
         self.name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
         self.description = try c.decodeIfPresent(String.self, forKey: .description)
-        self.kind = try c.decode(SankofaPulseSurveyKind.self, forKey: .kind)
+        // Unknown/future kinds must not fail the whole list decode (one bad
+        // element would otherwise drop every survey in the array).
+        self.kind = (try? c.decode(SankofaPulseSurveyKind.self, forKey: .kind)) ?? .custom
         self.status = try c.decodeIfPresent(String.self, forKey: .status) ?? ""
         self.slug = try c.decodeIfPresent(String.self, forKey: .slug)
         self.targetingRules = try c.decodeIfPresent(

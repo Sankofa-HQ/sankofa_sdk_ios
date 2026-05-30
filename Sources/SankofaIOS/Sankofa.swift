@@ -310,6 +310,13 @@ public final class Sankofa: NSObject {
     @objc
     public func screen(_ name: String, properties: [String: Any] = [:]) {
         self.currentScreen = name
+        // Canonical navigation signal — Pulse listens to re-evaluate
+        // auto-show. Decoupled via NotificationCenter so core never
+        // imports Pulse.
+        NotificationCenter.default.post(
+            name: SankofaNotifications.screenChanged,
+            object: nil,
+            userInfo: ["screen": name])
         var screenProps = properties
         screenProps["$screen_name"] = name
         track("$screen_view", properties: screenProps)
