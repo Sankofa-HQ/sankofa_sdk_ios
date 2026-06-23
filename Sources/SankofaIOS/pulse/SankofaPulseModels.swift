@@ -340,6 +340,7 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case survey
         case questions
+        case theme
         case targetingRules = "targeting_rules"
         case branchingRules = "branching_rules"
         case translations
@@ -347,11 +348,15 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        // Decode the questions sibling list and the survey row in
-        // parallel, then merge the questions into the survey so
-        // callers see one self-contained `survey` value.
+        // The questions list AND the theme ship on sibling keys, not
+        // nested in the survey row — merge both into the survey so callers
+        // see one self-contained `survey` value. Folding the sibling theme
+        // is what makes dashboard-set colors render; before this it was
+        // dropped and surveys used the default palette.
         let questions = try c.decodeIfPresent(
             [SankofaPulseQuestion].self, forKey: .questions) ?? []
+        let siblingTheme = try c.decodeIfPresent(
+            SankofaPulseTheme.self, forKey: .theme)
         if let baseSurvey = try c.decodeIfPresent(
             SankofaPulseSurvey.self, forKey: .survey) {
             self.survey = SankofaPulseSurvey(
@@ -360,7 +365,7 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
                 name: baseSurvey.name,
                 description: baseSurvey.description,
                 questions: questions,
-                theme: baseSurvey.theme)
+                theme: siblingTheme ?? baseSurvey.theme)
         } else {
             self.survey = SankofaPulseSurvey(
                 id: "",
@@ -368,7 +373,7 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
                 name: "",
                 description: nil,
                 questions: questions,
-                theme: nil)
+                theme: siblingTheme)
         }
         self.targetingRules = try c.decodeIfPresent(
             [SankofaPulseTargetingRule].self, forKey: .targetingRules) ?? []
@@ -382,6 +387,7 @@ public struct SankofaPulseSurveyBundle: Codable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(survey, forKey: .survey)
         try c.encode(survey.questions, forKey: .questions)
+        try c.encodeIfPresent(survey.theme, forKey: .theme)
         try c.encode(targetingRules, forKey: .targetingRules)
         try c.encode(branchingRules, forKey: .branchingRules)
         try c.encode(translations, forKey: .translations)
