@@ -146,6 +146,21 @@ final class SankofaReplayUploader {
                 envelope["events"] = events
             }
 
+            // Authoritative chunk span (epoch ms): each chunk is one frame, so
+            // bracket the frame's timestamp with any interactions captured in it.
+            // Across the session, max(ended)-min(started) over all single-frame
+            // chunks = real duration (idle gaps between frames included), so the
+            // server no longer has to fall back to upload time.
+            let frameMs = Int64(frame.timestamp.timeIntervalSince1970 * 1000)
+            var startedMs = frameMs
+            var endedMs = frameMs
+            for i in interactions {
+                let ms = Int64(i.timestamp.timeIntervalSince1970 * 1000)
+                if ms < startedMs { startedMs = ms }
+                if ms > endedMs { endedMs = ms }
+            }
+            let recordedEvents = (envelope["events"] as? [[String: Any]])?.count ?? 0
+
             // KILLER 2 (OOM Cleanup): Immediately encode and flush to SQLite, DO NOT hold in memory.
             // We tag it as 'replay_chunk' so the FlushManager knows where to send it.
             var finalPayload = envelope
@@ -153,6 +168,9 @@ final class SankofaReplayUploader {
             finalPayload["_session_id"] = frame.sessionId
             finalPayload["_chunk_index"] = currentChunk
             finalPayload["_replay_mode"] = replayMode
+            finalPayload["_started_at_ms"] = startedMs
+            finalPayload["_ended_at_ms"] = endedMs
+            finalPayload["_event_count"] = 1 + recordedEvents
 
             self.queueManager.enqueue(finalPayload, type: "replay_chunk")
             self.logger.log("📹 [v2] Frame queued (\(frame.sessionId)) chunk \(currentChunk)")
